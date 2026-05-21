@@ -5,11 +5,11 @@ APP_HOME="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
 SERVER_DIR="${APP_HOME}/server"
 DATA_DIR="${TRIM_USERDATA:-${APP_HOME}/data}"
 NODE_BIN="${SERVER_DIR}/runtime/node/bin/node"
-PID_FILE="${DATA_DIR}/fneditor.pid"
-LOG_FILE="${DATA_DIR}/fneditor.log"
+PID_FILE="${DATA_DIR}/fncode.pid"
+LOG_FILE="${DATA_DIR}/fncode.log"
 
-PORT="${FNEDITOR_PORT:-${TRIM_SERVICE_PORT:-39280}}"
-STATE_PATH="${FNEDITOR_STATE_PATH:-${DATA_DIR}/state.json}"
+PORT="${FNCODE_PORT:-${FNEDITOR_PORT:-${TRIM_SERVICE_PORT:-39280}}}"
+STATE_PATH="${FNCODE_STATE_PATH:-${FNEDITOR_STATE_PATH:-${DATA_DIR}/state.json}}"
 
 has_entries() {
   [ -d "$1" ] || return 1
@@ -66,7 +66,7 @@ detect_default_root() {
   printf '%s\n' "${DATA_DIR}/files"
 }
 
-ROOT_DIR="${FNEDITOR_ROOT:-$(detect_default_root)}"
+ROOT_DIR="${FNCODE_ROOT:-${FNEDITOR_ROOT:-$(detect_default_root)}}"
 
 is_running() {
   [ -f "$PID_FILE" ] || return 1
@@ -95,14 +95,14 @@ start_app() {
   NODE_ENV=production \
     PORT="$PORT" \
     FNEDITOR_ROOT="$ROOT_DIR" \
-    FNEDITOR_RESTRICT_ROOTS="${FNEDITOR_RESTRICT_ROOTS:-1}" \
+    FNEDITOR_RESTRICT_ROOTS="${FNCODE_RESTRICT_ROOTS:-${FNEDITOR_RESTRICT_ROOTS:-1}}" \
     FNEDITOR_STATE_PATH="$STATE_PATH" \
     nohup "$NODE_BIN" server/index.js >> "$LOG_FILE" 2>&1 &
   echo "$!" > "$PID_FILE"
   sleep 2
 
   if ! is_running; then
-    echo "fneditor failed to start, see $LOG_FILE" >&2
+    echo "FnCode failed to start, see $LOG_FILE" >&2
     exit 1
   fi
 }

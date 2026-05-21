@@ -1,14 +1,16 @@
 {
   ".url": {
-    "fneditor.Application": {
+    "fncode.Application": {
       "title": "FnCode",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",
-      "port": "39280",
-      "url": "/",
+      "url": "/cgi/ThirdParty/fncode/proxy.cgi/",
+      "singleInstance": true,
+      "multiInstance": false,
       "allUsers": true,
       "control": {
+        "fullUrlPerm": "editable",
         "accessPerm": "editable",
         "pathPerm": "editable"
       },

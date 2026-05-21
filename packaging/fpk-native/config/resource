@@ -2,18 +2,18 @@
   "data-share": {
     "shares": [
       {
-        "name": "fneditor",
+        "name": "fncode",
         "permission": {
           "rw": [
-            "fneditor"
+            "fncode"
           ]
         }
       },
       {
-        "name": "fneditor/data",
+        "name": "fncode/data",
         "permission": {
           "rw": [
-            "fneditor"
+            "fncode"
           ]
         }
       }

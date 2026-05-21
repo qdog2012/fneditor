@@ -3,11 +3,100 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
     <title>FnCode</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #1e1f22;
+        color: #d7dae0;
+        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      }
+
+      .preboot {
+        display: grid;
+        grid-template-columns: 48px 306px minmax(0, 1fr);
+        width: 100vw;
+        height: 100vh;
+        background: #1e1f22;
+      }
+
+      .preboot-activity {
+        background: #18191d;
+        border-right: 1px solid #17191d;
+      }
+
+      .preboot-sidebar {
+        background: #25272c;
+        border-right: 1px solid #383d45;
+        padding: 14px;
+      }
+
+      .preboot-main {
+        display: grid;
+        grid-template-rows: 40px 35px 1fr 24px;
+        min-width: 0;
+      }
+
+      .preboot-strip,
+      .preboot-tabs,
+      .preboot-status {
+        border-bottom: 1px solid #30343b;
+        background: #202227;
+      }
+
+      .preboot-status {
+        border-top: 1px solid #30343b;
+        border-bottom: 0;
+      }
+
+      .preboot-line,
+      .preboot-title {
+        height: 10px;
+        border-radius: 2px;
+        background: #343842;
+      }
+
+      .preboot-title {
+        width: 88px;
+        margin-bottom: 18px;
+      }
+
+      .preboot-line {
+        width: 100%;
+        margin-bottom: 10px;
+      }
+
+      .preboot-line:nth-child(3) {
+        width: 70%;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="preboot" aria-label="FnCode 正在加载">
+        <div class="preboot-activity"></div>
+        <div class="preboot-sidebar">
+          <div class="preboot-title"></div>
+          <div class="preboot-line"></div>
+          <div class="preboot-line"></div>
+          <div class="preboot-line"></div>
+        </div>
+        <div class="preboot-main">
+          <div class="preboot-strip"></div>
+          <div class="preboot-tabs"></div>
+          <div></div>
+          <div class="preboot-status"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

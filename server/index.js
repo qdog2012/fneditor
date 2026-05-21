@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import http from "node:http";
@@ -16,10 +17,25 @@ const statePath = path.resolve(process.env.FNEDITOR_STATE_PATH ?? path.join(proj
 const restrictRootSelection = ["1", "true", "yes"].includes(
   String(process.env.FNEDITOR_RESTRICT_ROOTS ?? "").trim().toLowerCase()
 );
+const handoffTtlMs = 15000;
+const instanceTtlMs = 5000;
 
 const app = express();
 app.disable("x-powered-by");
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.path === "/api/handoff/events") {
+        return false;
+      }
+      return compression.filter(req, res);
+    }
+  })
+);
 app.use(express.json({ limit: "12mb" }));
+const handoffClients = new Set();
+const handoffRequests = new Map();
+const activeInstances = new Map();
 
 const asyncRoute = (handler) => (req, res, next) => {
   Promise.resolve(handler(req, res, next)).catch(next);
@@ -29,6 +45,35 @@ function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function cleanupHandoffRequests() {
+  const now = Date.now();
+  for (const [id, request] of handoffRequests) {
+    if (now - request.createdAt > handoffTtlMs) {
+      handoffRequests.delete(id);
+    }
+  }
+}
+
+function cleanupActiveInstances() {
+  const now = Date.now();
+  for (const [id, instance] of activeInstances) {
+    if (now - instance.updatedAt > instanceTtlMs) {
+      activeInstances.delete(id);
+    }
+  }
+}
+
+function sendHandoffEvent(client, event, data) {
+  client.write(`event: ${event}\n`);
+  client.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastHandoffRequest(request) {
+  for (const client of handoffClients) {
+    sendHandoffEvent(client, "open-file", request);
+  }
 }
 
 async function exists(targetPath) {
@@ -741,6 +786,58 @@ app.get(
 );
 
 app.post(
+  "/api/instances/heartbeat",
+  asyncRoute(async (req, res) => {
+    cleanupActiveInstances();
+    const id = String(req.body?.id ?? "").trim();
+    if (!id) {
+      throw createHttpError(400, "缺少实例 id");
+    }
+
+    activeInstances.set(id, { id, updatedAt: Date.now() });
+    res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/instances/claim",
+  asyncRoute(async (req, res) => {
+    cleanupActiveInstances();
+    const id = String(req.body?.id ?? "").trim();
+    if (!id) {
+      throw createHttpError(400, "缺少实例 id");
+    }
+
+    const primary = [...activeInstances.values()]
+      .filter((instance) => instance.id !== id)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+
+    if (primary) {
+      res.json({ active: true, id: primary.id });
+      return;
+    }
+
+    activeInstances.set(id, { id, updatedAt: Date.now() });
+    res.json({ active: false, id });
+  })
+);
+
+app.get("/api/instances/primary", (req, res) => {
+  cleanupActiveInstances();
+  const sourceId = String(req.query.sourceId ?? "").trim();
+  const primary = [...activeInstances.values()]
+    .filter((instance) => instance.id !== sourceId)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+
+  res.json({ active: Boolean(primary), id: primary?.id ?? "" });
+});
+
+app.delete("/api/instances/:id", (req, res) => {
+  activeInstances.delete(String(req.params.id ?? ""));
+  res.json({ ok: true });
+});
+
+app.post(
   "/api/root",
   asyncRoute(async (req, res) => {
     const { path: nextRootPath } = req.body ?? {};
@@ -865,6 +962,87 @@ app.post(
       meta: getMetaPayload(),
       file
     });
+  })
+);
+
+app.get("/api/handoff/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  handoffClients.add(res);
+  sendHandoffEvent(res, "ready", { ok: true });
+
+  const ping = setInterval(() => {
+    sendHandoffEvent(res, "ping", { now: Date.now() });
+  }, 20000);
+
+  req.on("close", () => {
+    clearInterval(ping);
+    handoffClients.delete(res);
+  });
+});
+
+app.post(
+  "/api/handoff/open",
+  asyncRoute(async (req, res) => {
+    cleanupHandoffRequests();
+    const id = String(req.body?.id ?? "").trim();
+    const sourceId = String(req.body?.sourceId ?? "").trim();
+    const requestedPath = String(req.body?.path ?? "").trim();
+    if (!id || !sourceId || !requestedPath) {
+      throw createHttpError(400, "缺少打开请求参数");
+    }
+
+    const request = {
+      type: "open-file",
+      id,
+      sourceId,
+      path: requestedPath,
+      createdAt: Date.now(),
+      acknowledged: false
+    };
+    handoffRequests.set(id, request);
+    broadcastHandoffRequest(request);
+    res.json({ ok: true });
+  })
+);
+
+app.get("/api/handoff/status", (req, res) => {
+  cleanupHandoffRequests();
+  const id = String(req.query.id ?? "").trim();
+  const request = handoffRequests.get(id);
+  res.json({ acknowledged: Boolean(request?.acknowledged) });
+});
+
+app.get("/api/handoff/pending", (req, res) => {
+  cleanupHandoffRequests();
+  const sourceId = String(req.query.sourceId ?? "").trim();
+  const items = [];
+  for (const request of handoffRequests.values()) {
+    if (!request.acknowledged && request.sourceId !== sourceId) {
+      items.push(request);
+    }
+  }
+  res.json({ items: items.slice(-20) });
+});
+
+app.post(
+  "/api/handoff/ack",
+  asyncRoute(async (req, res) => {
+    cleanupHandoffRequests();
+    const id = String(req.body?.id ?? "").trim();
+    if (!id) {
+      throw createHttpError(400, "缺少请求 id");
+    }
+
+    const request = handoffRequests.get(id);
+    if (request) {
+      request.acknowledged = true;
+      request.acknowledgedAt = Date.now();
+    }
+    res.json({ ok: true });
   })
 );
 

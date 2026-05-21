@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="${APP_NAME:-fneditor}"
+APP_NAME="${APP_NAME:-fncode}"
 VERSION="${VERSION:-$(grep -m1 '^version=' "${ROOT_DIR}/packaging/fpk-native/manifest" | cut -d= -f2-)}"
 STAGE_DIR="${STAGE_DIR:-${ROOT_DIR}/build/fpk-native/${APP_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/build/fpk-output}"
@@ -114,10 +114,38 @@ mkdir -p "$OUTPUT_DIR"
 rm -f "$STAGE_DIR/app.tgz" "$OUTPUT_FILE"
 mkdir -p "$STAGE_DIR/app/ui/images"
 
-generate_png "$STAGE_DIR/ICON.PNG" 256
-cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/ICON_256.PNG"
-cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/app/ui/images/icon_256.png"
-generate_png "$STAGE_DIR/app/ui/images/icon_64.png" 64
+if [ -f "$STAGE_DIR/ICON.PNG" ]; then
+  [ -f "$STAGE_DIR/ICON_256.PNG" ] || cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/ICON_256.PNG"
+  [ -f "$STAGE_DIR/app/ui/images/icon_256.png" ] || cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/app/ui/images/icon_256.png"
+  [ -f "$STAGE_DIR/app/ui/images/icon-256.png" ] || cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/app/ui/images/icon-256.png"
+else
+  generate_png "$STAGE_DIR/ICON.PNG" 256
+  cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/ICON_256.PNG"
+  cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/app/ui/images/icon_256.png"
+  cp "$STAGE_DIR/ICON.PNG" "$STAGE_DIR/app/ui/images/icon-256.png"
+fi
+
+if [ ! -f "$STAGE_DIR/app/ui/images/icon_64.png" ]; then
+  generate_png "$STAGE_DIR/app/ui/images/icon_64.png" 64
+fi
+
+if [ ! -f "$STAGE_DIR/app/ui/images/icon-64.png" ]; then
+  cp "$STAGE_DIR/app/ui/images/icon_64.png" "$STAGE_DIR/app/ui/images/icon-64.png"
+fi
+
+if [ ! -f "$STAGE_DIR/app/ui/images/icon.png" ]; then
+  cp "$STAGE_DIR/app/ui/images/icon_256.png" "$STAGE_DIR/app/ui/images/icon.png"
+fi
+
+if [ -f "$STAGE_DIR/ICON_128.PNG" ]; then
+  [ -f "$STAGE_DIR/app/ui/images/icon_128.png" ] || cp "$STAGE_DIR/ICON_128.PNG" "$STAGE_DIR/app/ui/images/icon_128.png"
+  [ -f "$STAGE_DIR/app/ui/images/icon-128.png" ] || cp "$STAGE_DIR/ICON_128.PNG" "$STAGE_DIR/app/ui/images/icon-128.png"
+fi
+
+if [ -f "$STAGE_DIR/ICON_512.PNG" ]; then
+  [ -f "$STAGE_DIR/app/ui/images/icon_512.png" ] || cp "$STAGE_DIR/ICON_512.PNG" "$STAGE_DIR/app/ui/images/icon_512.png"
+  [ -f "$STAGE_DIR/app/ui/images/icon-512.png" ] || cp "$STAGE_DIR/ICON_512.PNG" "$STAGE_DIR/app/ui/images/icon-512.png"
+fi
 
 find "$STAGE_DIR/cmd" -type f -exec sed -i 's/\r$//' {} \;
 sed -i 's/\r$//' "$STAGE_DIR/manifest"

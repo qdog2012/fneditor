@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ORIGINAL_ROOT_DIR="$ROOT_DIR"
-APP_NAME="fneditor"
+APP_NAME="fncode"
 NODE_VERSION="${NODE_VERSION:-22.16.0}"
 
 require_cmd() {
@@ -30,7 +30,7 @@ is_wsl_mnt_path() {
 }
 
 if is_wsl_mnt_path; then
-  WORK_ROOT="${FPK_WORK_ROOT:-${HOME}/.cache/fneditor-fpk-src}"
+  WORK_ROOT="${FPK_WORK_ROOT:-${HOME}/.cache/fncode-fpk-src}"
   echo "Detected WSL project path under /mnt."
   echo "Copying source to Linux filesystem before npm install:"
   echo "  ${WORK_ROOT}"
@@ -91,6 +91,7 @@ cat > "${STAGE_DIR}/app/server/package.json" <<EOF
   "private": true,
   "type": "module",
   "dependencies": {
+    "compression": "$(node -p "require('./package.json').dependencies.compression")",
     "express": "$(node -p "require('./package.json').dependencies.express")"
   }
 }

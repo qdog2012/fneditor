@@ -64,11 +64,15 @@ button:disabled {
 
 .workbench {
   display: grid;
-  grid-template-columns: 48px minmax(238px, 306px) minmax(0, 1fr);
+  grid-template-columns: 48px var(--sidebar-width, 306px) minmax(0, 1fr);
   grid-template-rows: 100vh;
   width: 100vw;
   height: 100vh;
   background: var(--bg);
+}
+
+.workbench.is-sidebar-hidden {
+  grid-template-columns: 48px 0 minmax(0, 1fr);
 }
 
 .workbench.theme-dark {
@@ -151,11 +155,64 @@ button:disabled {
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--border-strong);
+}
+
+.workbench.is-sidebar-hidden .sidebar {
+  overflow: hidden;
+  border-right: 0;
+  pointer-events: none;
+}
+
+.sidebar-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 8;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  content: "";
+}
+
+.sidebar-resizer:hover::after,
+body.is-resizing-sidebar .sidebar-resizer::after {
+  background: var(--accent-strong);
+}
+
+.workbench.is-sidebar-hidden .sidebar-resizer {
+  display: none;
+}
+
+body.is-resizing-sidebar {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.is-resizing-sidebar * {
+  cursor: col-resize !important;
 }
 
 .sidebar-titlebar {
@@ -467,6 +524,29 @@ button:disabled {
   margin: 0;
   color: var(--text-muted);
   font-size: 15px;
+}
+
+.handoff-screen {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+
+.handoff-message {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.editor-loading {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: var(--bg);
+  font-size: 13px;
 }
 
 .welcome-actions {
@@ -840,7 +920,11 @@ button:disabled {
 
 @media (max-width: 800px) {
   .workbench {
-    grid-template-columns: 42px minmax(190px, 42vw) minmax(0, 1fr);
+    grid-template-columns: 42px minmax(190px, min(var(--sidebar-width, 306px), 42vw)) minmax(0, 1fr);
+  }
+
+  .workbench.is-sidebar-hidden {
+    grid-template-columns: 42px 0 minmax(0, 1fr);
   }
 
   .activity-button {
