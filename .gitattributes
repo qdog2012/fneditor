@@ -1,0 +1,6 @@
+* text=auto
+
+*.sh text eol=lf
+packaging/fpk-native/cmd/* text eol=lf
+packaging/fpk-native/app/ui/proxy.cgi text eol=lf
+packaging/fpk-native/manifest text eol=lf

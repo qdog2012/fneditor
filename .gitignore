@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.DS_Store
+*.log
+*.zip
+*.fpk
+.env
+.fneditor-state.json
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js

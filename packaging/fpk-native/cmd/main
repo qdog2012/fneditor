@@ -1,0 +1,149 @@
+#!/bin/sh
+set -eu
+
+APP_HOME="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
+SERVER_DIR="${APP_HOME}/server"
+DATA_DIR="${TRIM_USERDATA:-${APP_HOME}/data}"
+NODE_BIN="${SERVER_DIR}/runtime/node/bin/node"
+PID_FILE="${DATA_DIR}/fneditor.pid"
+LOG_FILE="${DATA_DIR}/fneditor.log"
+
+PORT="${FNEDITOR_PORT:-${TRIM_SERVICE_PORT:-39280}}"
+STATE_PATH="${FNEDITOR_STATE_PATH:-${DATA_DIR}/state.json}"
+
+has_entries() {
+  [ -d "$1" ] || return 1
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [ -e "$entry" ] && return 0
+  done
+  return 1
+}
+
+list_volumes() {
+  find / -maxdepth 1 -type d -name 'vol[0-9]*' 2>/dev/null \
+    | sed 's#^/vol##' \
+    | sort -n \
+    | sed 's#^#/vol#'
+}
+
+detect_default_root() {
+  for volume in $(list_volumes); do
+    candidate="${volume}/1000"
+    if has_entries "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  for uid in "${TRIM_USER_ID:-}" "${TRIM_UID:-}" "${PUID:-}" "1000"; do
+    [ -n "$uid" ] || continue
+    for candidate in "/share/home/${uid}/webdav" "/share/home/${uid}"; do
+      if [ -d "$candidate" ]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  done
+
+  for volume in $(list_volumes); do
+    for uid in "${TRIM_USER_ID:-}" "${TRIM_UID:-}" "${PUID:-}" "1000"; do
+      [ -n "$uid" ] || continue
+      candidate="${volume}/${uid}"
+      if [ -d "$candidate" ]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  done
+
+  for candidate in /share/home/*/webdav; do
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "${DATA_DIR}/files"
+}
+
+ROOT_DIR="${FNEDITOR_ROOT:-$(detect_default_root)}"
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+start_app() {
+  mkdir -p "$DATA_DIR"
+  if [ "$ROOT_DIR" = "${DATA_DIR}/files" ]; then
+    mkdir -p "$ROOT_DIR"
+  fi
+
+  if is_running; then
+    exit 0
+  fi
+
+  chmod +x "$NODE_BIN" 2>/dev/null || true
+  if [ ! -x "$NODE_BIN" ]; then
+    echo "Node runtime not found: $NODE_BIN" >&2
+    exit 1
+  fi
+
+  cd "$SERVER_DIR"
+  NODE_ENV=production \
+    PORT="$PORT" \
+    FNEDITOR_ROOT="$ROOT_DIR" \
+    FNEDITOR_RESTRICT_ROOTS="${FNEDITOR_RESTRICT_ROOTS:-1}" \
+    FNEDITOR_STATE_PATH="$STATE_PATH" \
+    nohup "$NODE_BIN" server/index.js >> "$LOG_FILE" 2>&1 &
+  echo "$!" > "$PID_FILE"
+  sleep 2
+
+  if ! is_running; then
+    echo "fneditor failed to start, see $LOG_FILE" >&2
+    exit 1
+  fi
+}
+
+stop_app() {
+  if is_running; then
+    pid="$(cat "$PID_FILE")"
+    kill "$pid" 2>/dev/null || true
+    count=0
+    while kill -0 "$pid" 2>/dev/null && [ "$count" -lt 20 ]; do
+      sleep 1
+      count=$((count + 1))
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+}
+
+status_app() {
+  if is_running; then
+    exit 0
+  fi
+  exit 3
+}
+
+case "${1:-}" in
+  start)
+    start_app
+    ;;
+  stop)
+    stop_app
+    ;;
+  restart)
+    stop_app
+    start_app
+    ;;
+  status)
+    status_app
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}" >&2
+    exit 2
+    ;;
+esac

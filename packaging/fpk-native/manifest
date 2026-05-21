@@ -1,0 +1,16 @@
+appname=fneditor
+version=0.1.20
+display_name=FnCode
+desc="""VS Code 风格的飞牛文件代码编辑器，支持文件树、搜索、多标签编辑和保存。"""
+platform=x86
+source=thirdparty
+maintainer=fneditor
+distributor=fneditor
+os_min_version=0.0.1
+install_type=root
+desktop_uidir=ui
+desktop_applaunchname=fneditor.Application
+service_port=39280
+checkport=true
+disable_authorization_path=false
+changelog=Add a minimal systemd file type batch to validate fnOS open-with compatibility.

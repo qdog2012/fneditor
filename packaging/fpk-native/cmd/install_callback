@@ -1,0 +1,7 @@
+#!/bin/sh
+APP_HOME="${TRIM_APPDEST:-}"
+if [ -n "$APP_HOME" ]; then
+  chmod +x "$APP_HOME/server/runtime/node/bin/node" 2>/dev/null || true
+  chmod +x "$APP_HOME/ui/proxy.cgi" 2>/dev/null || true
+fi
+exit 0

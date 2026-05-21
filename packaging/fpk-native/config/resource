@@ -1,0 +1,22 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "fneditor",
+        "permission": {
+          "rw": [
+            "fneditor"
+          ]
+        }
+      },
+      {
+        "name": "fneditor/data",
+        "permission": {
+          "rw": [
+            "fneditor"
+          ]
+        }
+      }
+    ]
+  }
+}
