@@ -916,6 +916,8 @@ export default function App() {
 
   useEffect(() => {
     window.localStorage.setItem("fncode.theme", themeMode);
+    document.documentElement.dataset.fncodeTheme = themeMode;
+    document.documentElement.style.colorScheme = themeMode;
   }, [themeMode]);
 
   useEffect(() => {

@@ -7,7 +7,103 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <title>FnCode</title>
+    <script>
+      (() => {
+        const externalOpenKeys = ["open", "file", "path", "filepath", "filePath", "absolutePath", "target", "uri"];
+
+        const decodeExternalValue = (value) => {
+          let decoded = value.trim();
+          for (let index = 0; index < 2; index += 1) {
+            try {
+              const next = decodeURIComponent(decoded).trim();
+              if (next === decoded) {
+                break;
+              }
+              decoded = next;
+            } catch {
+              break;
+            }
+          }
+
+          if (decoded.startsWith("file://")) {
+            try {
+              return decodeURIComponent(new URL(decoded).pathname);
+            } catch {
+              return decoded.replace(/^file:\/+/, "/");
+            }
+          }
+
+          return decoded;
+        };
+
+        const isAbsolutePath = (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+        const hasExternalOpenPath = (search) => {
+          const params = new URLSearchParams(search);
+          for (const key of externalOpenKeys) {
+            const value = params.get(key);
+            if (value && isAbsolutePath(decodeExternalValue(value))) {
+              return true;
+            }
+          }
+
+          for (const value of params.values()) {
+            if (isAbsolutePath(decodeExternalValue(value))) {
+              return true;
+            }
+          }
+
+          return false;
+        };
+
+        let theme = "dark";
+        try {
+          theme = window.localStorage.getItem("fncode.theme") === "light" ? "light" : "dark";
+        } catch {
+          theme = "dark";
+        }
+
+        document.documentElement.dataset.fncodeTheme = theme;
+        document.documentElement.style.colorScheme = theme;
+
+        const searches = [window.location.search];
+        const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+        const hashQueryIndex = hash.indexOf("?");
+        if (hash.startsWith("?")) {
+          searches.push(hash);
+        } else if (hashQueryIndex >= 0) {
+          searches.push(hash.slice(hashQueryIndex));
+        }
+
+        if (searches.some(hasExternalOpenPath)) {
+          document.documentElement.dataset.fncodeExternalOpen = "true";
+        }
+      })();
+    </script>
     <style>
+      html {
+        --preboot-bg: #1e1f22;
+        --preboot-text: #d7dae0;
+        --preboot-activity: #18191d;
+        --preboot-activity-border: #17191d;
+        --preboot-sidebar: #25272c;
+        --preboot-sidebar-border: #383d45;
+        --preboot-surface: #202227;
+        --preboot-border: #30343b;
+        --preboot-placeholder: #343842;
+      }
+
+      html[data-fncode-theme="light"] {
+        --preboot-bg: #fbfcfd;
+        --preboot-text: #23272f;
+        --preboot-activity: #e9edf2;
+        --preboot-activity-border: #c4ccd8;
+        --preboot-sidebar: #f2f4f7;
+        --preboot-sidebar-border: #c9d1dc;
+        --preboot-surface: #eef1f5;
+        --preboot-border: #d8dee7;
+        --preboot-placeholder: #d7dee8;
+      }
+
       html,
       body,
       #root {
@@ -15,8 +111,8 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #1e1f22;
-        color: #d7dae0;
+        background: var(--preboot-bg);
+        color: var(--preboot-text);
         font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
       }
 
@@ -25,18 +121,26 @@
         grid-template-columns: 48px 306px minmax(0, 1fr);
         width: 100vw;
         height: 100vh;
-        background: #1e1f22;
+        background: var(--preboot-bg);
+      }
+
+      html[data-fncode-external-open="true"] .preboot {
+        grid-template-columns: 48px 0 minmax(0, 1fr);
       }
 
       .preboot-activity {
-        background: #18191d;
-        border-right: 1px solid #17191d;
+        background: var(--preboot-activity);
+        border-right: 1px solid var(--preboot-activity-border);
       }
 
       .preboot-sidebar {
-        background: #25272c;
-        border-right: 1px solid #383d45;
+        background: var(--preboot-sidebar);
+        border-right: 1px solid var(--preboot-sidebar-border);
         padding: 14px;
+      }
+
+      html[data-fncode-external-open="true"] .preboot-sidebar {
+        display: none;
       }
 
       .preboot-main {
@@ -48,12 +152,12 @@
       .preboot-strip,
       .preboot-tabs,
       .preboot-status {
-        border-bottom: 1px solid #30343b;
-        background: #202227;
+        border-bottom: 1px solid var(--preboot-border);
+        background: var(--preboot-surface);
       }
 
       .preboot-status {
-        border-top: 1px solid #30343b;
+        border-top: 1px solid var(--preboot-border);
         border-bottom: 0;
       }
 
@@ -61,7 +165,7 @@
       .preboot-title {
         height: 10px;
         border-radius: 2px;
-        background: #343842;
+        background: var(--preboot-placeholder);
       }
 
       .preboot-title {
