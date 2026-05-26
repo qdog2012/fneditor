@@ -1,2 +1,6 @@
 #!/bin/sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "${SCRIPT_DIR}/main" ]; then
+  "${SCRIPT_DIR}/main" stop 2>/dev/null || true
+fi
 exit 0

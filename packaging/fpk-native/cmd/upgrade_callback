@@ -1,2 +1,9 @@
 #!/bin/sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_HOME="${TRIM_APPDEST:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+chmod +x "${APP_HOME}/server/runtime/node/bin/node" 2>/dev/null || true
+chmod +x "${APP_HOME}/ui/proxy.cgi" 2>/dev/null || true
+if [ -x "${SCRIPT_DIR}/main" ]; then
+  "${SCRIPT_DIR}/main" start
+fi
 exit 0

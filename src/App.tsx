@@ -95,6 +95,7 @@ type FilePayload = {
   name: string;
   content: string;
   modifiedAt: string;
+  size?: number;
   encoding?: string;
   hasBom?: boolean;
 };
@@ -599,14 +600,14 @@ async function sendServerInstanceHeartbeat(instanceId: string) {
 }
 
 async function claimServerPrimaryInstance(instanceId: string) {
-  return apiRequest<{ active: boolean; id: string }>("/api/instances/claim", {
+  return apiRequest<{ active: boolean; id: string; ageMs?: number }>("/api/instances/claim", {
     method: "POST",
     body: JSON.stringify({ id: instanceId })
   });
 }
 
 async function getServerPrimaryInstance(instanceId: string) {
-  return apiRequest<{ active: boolean; id: string }>(
+  return apiRequest<{ active: boolean; id: string; ageMs?: number }>(
     `/api/instances/primary?sourceId=${encodeURIComponent(instanceId)}`
   );
 }
@@ -615,6 +616,24 @@ function removeServerInstance(instanceId: string) {
   return fetch(resolveApiUrl(`/api/instances/${encodeURIComponent(instanceId)}`), { method: "DELETE" }).catch(
     () => undefined
   );
+}
+
+function releaseServerInstance(instanceId: string) {
+  const body = JSON.stringify({ id: instanceId });
+  const url = resolveApiUrl("/api/instances/release");
+
+  try {
+    navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }));
+  } catch {
+    // fetch with keepalive is the fallback below.
+  }
+
+  return fetch(url, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body
+  }).catch(() => undefined);
 }
 
 function getLanguage(filePath: string) {
@@ -821,14 +840,22 @@ export default function App() {
       writeInstanceRecord(instanceId);
       void sendServerInstanceHeartbeat(instanceId).catch(() => undefined);
     };
+    const releaseInstance = () => {
+      removeInstanceRecord(instanceId);
+      void releaseServerInstance(instanceId);
+    };
 
     heartbeat();
     const intervalId = window.setInterval(heartbeat, INSTANCE_HEARTBEAT_MS);
+    window.addEventListener("pagehide", releaseInstance);
+    window.addEventListener("beforeunload", releaseInstance);
 
     return () => {
       window.clearInterval(intervalId);
       isPrimaryInstanceRef.current = false;
-      removeInstanceRecord(instanceId);
+      window.removeEventListener("pagehide", releaseInstance);
+      window.removeEventListener("beforeunload", releaseInstance);
+      releaseInstance();
       void removeServerInstance(instanceId);
     };
   }, [externalOpenRole, handoffState]);
@@ -1208,15 +1235,20 @@ export default function App() {
         return;
       }
 
-      const latestContent =
-        pathName === activePathRef.current ? editorRef.current?.getValue() ?? file.content : file.content;
+      const editor = editorRef.current;
+      const latestContent = editor?.filePath === pathName ? editor.getValue() : file.content;
+      if (!file.path || typeof latestContent !== "string") {
+        showMessage("保存失败：当前标签缺少路径或内容，请关闭此标签后重新打开文件");
+        return;
+      }
 
       setIsSaving(true);
       try {
-        const payload = await apiRequest<{ path: string; modifiedAt: string; size: number }>("/api/file", {
-          method: "PUT",
+        const payload = await apiRequest<FilePayload>("/api/file/save", {
+          method: "POST",
           body: JSON.stringify({
             path: file.path,
+            absolutePath: file.absolutePath,
             content: latestContent,
             encoding: file.encoding,
             hasBom: file.hasBom
@@ -1227,15 +1259,21 @@ export default function App() {
             entry.path === file.path
               ? {
                   ...entry,
-                  content: latestContent,
-                  savedContent: latestContent,
+                  content: payload.content,
+                  savedContent: payload.content,
+                  absolutePath: payload.absolutePath || entry.absolutePath,
                   modifiedAt: payload.modifiedAt
                 }
               : entry
           )
         );
-        await refreshDirectory(getParentPath(file.path));
-        showMessage(`已保存 ${file.name}`);
+        try {
+          await refreshDirectory(getParentPath(payload.path || file.path));
+        } catch {
+          // Saving succeeded; refreshing the explorer can fail if the file is outside the current root.
+        }
+        const savedPath = payload.absolutePath || file.absolutePath || file.name;
+        showMessage(`已保存 ${savedPath}`);
       } catch (error) {
         showMessage(error instanceof Error ? error.message : "保存失败");
       } finally {
@@ -1491,15 +1529,21 @@ export default function App() {
       }
 
       handledInstanceMessageIdsRef.current.add(message.id);
-      postInstanceMessage({
-        type: "open-file-ack",
-        id: createInstanceId(),
-        requestId: message.id,
-        sourceId: instanceIdRef.current,
-        createdAt: Date.now()
+      void openExternalAbsolutePath(message.path).then((opened) => {
+        if (!opened) {
+          handledInstanceMessageIdsRef.current.delete(message.id);
+          return;
+        }
+
+        postInstanceMessage({
+          type: "open-file-ack",
+          id: createInstanceId(),
+          requestId: message.id,
+          sourceId: instanceIdRef.current,
+          createdAt: Date.now()
+        });
+        void acknowledgeServerHandoff(message.id).catch(() => undefined);
       });
-      void acknowledgeServerHandoff(message.id).catch(() => undefined);
-      void openExternalAbsolutePath(message.path);
     };
 
     let channel: BroadcastChannel | null = null;
@@ -1541,7 +1585,7 @@ export default function App() {
     window.addEventListener("storage", handleStorage);
     handleMessage(safeParseInstanceMessage(window.localStorage.getItem(INSTANCE_MESSAGE_KEY)));
     pollPendingHandoffs();
-    const pendingPollId = window.setInterval(pollPendingHandoffs, 350);
+    const pendingPollId = window.setInterval(pollPendingHandoffs, 180);
 
     return () => {
       window.clearInterval(pendingPollId);
@@ -1573,6 +1617,7 @@ export default function App() {
     };
 
     let completed = false;
+    let checkingPrimary = false;
     const completeAndClose = () => {
       if (completed) {
         return;
@@ -1585,6 +1630,16 @@ export default function App() {
       window.setTimeout(closeHandoffWindow, 700);
     };
 
+    const promoteToPrimary = () => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      externalOpenHandledRef.current = false;
+      setExternalOpenRole("primary");
+    };
+
     const pollStatus = () => {
       void getServerHandoffStatus(request.id)
         .then((payload) => {
@@ -1595,44 +1650,44 @@ export default function App() {
         .catch(() => undefined);
     };
 
+    const promoteOnlyWhenNoPrimaryExists = () => {
+      if (completed || checkingPrimary) {
+        return;
+      }
+
+      checkingPrimary = true;
+      void getServerPrimaryInstance(instanceIdRef.current)
+        .then(async (primary) => {
+          if (completed || primary.active) {
+            return;
+          }
+
+          const claim = await claimServerPrimaryInstance(instanceIdRef.current);
+          if (!completed && !claim.active) {
+            promoteToPrimary();
+          }
+        })
+        .catch(() => {
+          if (!completed) {
+            setSecondaryOpenStatus("failed");
+          }
+        })
+        .finally(() => {
+          checkingPrimary = false;
+        });
+    };
+
     postInstanceMessage(request);
     void postServerHandoffRequest(request).catch(() => undefined);
-    window.setTimeout(closeHandoffWindow, 80);
-    window.setTimeout(closeHandoffWindow, 260);
     pollStatus();
     const pollId = window.setInterval(pollStatus, 200);
-    const timeoutId = window.setTimeout(() => {
-      window.clearInterval(pollId);
-      if (!completed) {
-        void getServerPrimaryInstance(instanceIdRef.current)
-          .then((payload) => {
-            if (completed) {
-              return;
-            }
-            if (!payload.active) {
-              completed = true;
-              externalOpenHandledRef.current = false;
-              setExternalOpenRole("primary");
-              return;
-            }
-            setSecondaryOpenStatus("failed");
-            closeHandoffWindow();
-            window.setTimeout(closeHandoffWindow, 300);
-          })
-          .catch(() => {
-            if (completed) {
-              return;
-            }
-            completed = true;
-            externalOpenHandledRef.current = false;
-            setExternalOpenRole("primary");
-          });
-      }
-    }, 3200);
+    const primaryCheckTimeoutId = window.setTimeout(promoteOnlyWhenNoPrimaryExists, HANDOFF_ACK_TIMEOUT_MS);
+    const primaryCheckIntervalId = window.setInterval(promoteOnlyWhenNoPrimaryExists, HANDOFF_ACK_TIMEOUT_MS);
 
     return () => {
       window.clearInterval(pollId);
-      window.clearTimeout(timeoutId);
+      window.clearTimeout(primaryCheckTimeoutId);
+      window.clearInterval(primaryCheckIntervalId);
     };
   }, [initialExternalOpenPath, shouldUseExternalSecondaryMode]);
 

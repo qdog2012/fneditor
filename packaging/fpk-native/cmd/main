@@ -10,6 +10,7 @@ LOG_FILE="${DATA_DIR}/fncode.log"
 
 PORT="${FNCODE_PORT:-${FNEDITOR_PORT:-${TRIM_SERVICE_PORT:-39280}}}"
 STATE_PATH="${FNCODE_STATE_PATH:-${FNEDITOR_STATE_PATH:-${DATA_DIR}/state.json}}"
+APP_VERSION="$(sed -n 's/^version=//p' "${APP_HOME}/manifest" 2>/dev/null | head -n 1 || true)"
 
 has_entries() {
   [ -d "$1" ] || return 1
@@ -94,6 +95,7 @@ start_app() {
   cd "$SERVER_DIR"
   NODE_ENV=production \
     PORT="$PORT" \
+    FNCODE_VERSION="$APP_VERSION" \
     FNEDITOR_ROOT="$ROOT_DIR" \
     FNEDITOR_RESTRICT_ROOTS="${FNCODE_RESTRICT_ROOTS:-${FNEDITOR_RESTRICT_ROOTS:-1}}" \
     FNEDITOR_STATE_PATH="$STATE_PATH" \

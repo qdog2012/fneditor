@@ -28,6 +28,7 @@ loader.config({ monaco });
 };
 
 export type CodeEditorHandle = {
+  filePath: string;
   layout: () => void;
   getValue: () => string;
 };
@@ -123,6 +124,7 @@ export default function CodeEditor({
       disposablesRef.current = [];
 
       onEditorReady({
+        filePath,
         layout: () => editor.layout(),
         getValue: () => editor.getValue()
       });
@@ -142,7 +144,7 @@ export default function CodeEditor({
         })
       );
     },
-    [onCursorChange, onEditorReady, onSave]
+    [filePath, onCursorChange, onEditorReady, onSave]
   );
 
   return (

@@ -6,15 +6,23 @@
       "type": "iframe",
       "protocol": "http",
       "url": "/cgi/ThirdParty/fncode/proxy.cgi/",
-      "singleInstance": true,
-      "multiInstance": false,
       "allUsers": true,
       "control": {
-        "fullUrlPerm": "editable",
-        "accessPerm": "editable",
-        "pathPerm": "editable"
+        "accessPerm": "editable"
       },
-      "noDisplay": false,
+      "noDisplay": false
+    },
+    "fncode.OpenWith": {
+      "title": "FnCode",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "url": "/cgi/ThirdParty/fncode/proxy.cgi/open-with",
+      "allUsers": true,
+      "control": {
+        "accessPerm": "editable"
+      },
+      "noDisplay": true,
       "fileTypes": [
         "text",
         "txt",

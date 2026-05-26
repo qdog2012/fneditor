@@ -37,8 +37,11 @@ if [ -n "$CONTENT_TYPE" ]; then
 fi
 curl_args+=("$target_url")
 
-if [ "$REQUEST_METHOD" = "POST" ]; then
-    exec cat | curl "${curl_args[@]}" --data-binary @- --include | sed -e '/^HTTP\/1.1 100/,/^\r\?$/d'
-else
-    exec curl "${curl_args[@]}" --include | sed -e '/^HTTP\/1.1 100/,/^\r\?$/d'
-fi
+case "$REQUEST_METHOD" in
+    POST|PUT|PATCH)
+        exec cat | curl "${curl_args[@]}" --data-binary @- | sed -e '/^HTTP\/1.1 100/,/^\r\?$/d'
+        ;;
+    *)
+        exec curl "${curl_args[@]}" | sed -e '/^HTTP\/1.1 100/,/^\r\?$/d'
+        ;;
+esac

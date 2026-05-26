@@ -18,7 +18,7 @@ const restrictRootSelection = ["1", "true", "yes"].includes(
   String(process.env.FNEDITOR_RESTRICT_ROOTS ?? "").trim().toLowerCase()
 );
 const handoffTtlMs = 15000;
-const instanceTtlMs = 5000;
+const instanceTtlMs = 3000;
 
 const app = express();
 app.disable("x-powered-by");
@@ -33,6 +33,12 @@ app.use(
   })
 );
 app.use(express.json({ limit: "12mb" }));
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+});
 const handoffClients = new Set();
 const handoffRequests = new Map();
 const activeInstances = new Map();
@@ -465,6 +471,42 @@ async function getWritableFilePath(clientPath = "") {
   return getWritablePath(clientPath);
 }
 
+async function getWritableFileTarget(clientPath = "", requestedAbsolutePath = "") {
+  const absoluteInput = String(requestedAbsolutePath ?? "").trim();
+  if (!absoluteInput) {
+    return getWritableFilePath(clientPath);
+  }
+
+  if (!path.isAbsolute(absoluteInput)) {
+    throw createHttpError(400, "absolutePath 必须是绝对路径");
+  }
+
+  const absolute = path.resolve(absoluteInput);
+  let targetPath = absolute;
+  if (await exists(absolute)) {
+    targetPath = await fs.realpath(absolute);
+    const stat = await fs.stat(targetPath);
+    if (!stat.isFile()) {
+      throw createHttpError(400, "目标路径不是文件");
+    }
+  } else {
+    const parent = path.dirname(absolute);
+    const parentReal = await fs.realpath(parent);
+    if (!(await isAllowedEditorRoot(parentReal))) {
+      throw createHttpError(403, "保存路径不在允许访问的目录内");
+    }
+  }
+
+  if (!(await isAllowedEditorRoot(targetPath))) {
+    throw createHttpError(403, "保存路径不在允许访问的目录内");
+  }
+
+  const relative = isPathInside(rootPath, targetPath)
+    ? toClientPath(targetPath)
+    : normalizeClientPath(clientPath) || path.basename(targetPath);
+  return { absolute: targetPath, relative };
+}
+
 function compareTreeItems(a, b) {
   if (a.type !== b.type) {
     return a.type === "directory" ? -1 : 1;
@@ -604,6 +646,16 @@ function encodeTextContent(content, encoding = "utf8", hasBom = false) {
 
   const prefix = hasBom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0);
   return Buffer.concat([prefix, Buffer.from(content, "utf8")]);
+}
+
+async function writeFileAndSync(filePath, data) {
+  const handle = await fs.open(filePath, "w");
+  try {
+    await handle.writeFile(data);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 function throwIfAborted(signal) {
@@ -813,12 +865,12 @@ app.post(
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
     if (primary) {
-      res.json({ active: true, id: primary.id });
+      res.json({ active: true, id: primary.id, ageMs: Date.now() - primary.updatedAt });
       return;
     }
 
     activeInstances.set(id, { id, updatedAt: Date.now() });
-    res.json({ active: false, id });
+    res.json({ active: false, id, ageMs: 0 });
   })
 );
 
@@ -829,11 +881,19 @@ app.get("/api/instances/primary", (req, res) => {
     .filter((instance) => instance.id !== sourceId)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
-  res.json({ active: Boolean(primary), id: primary?.id ?? "" });
+  res.json({ active: Boolean(primary), id: primary?.id ?? "", ageMs: primary ? Date.now() - primary.updatedAt : 0 });
 });
 
 app.delete("/api/instances/:id", (req, res) => {
   activeInstances.delete(String(req.params.id ?? ""));
+  res.json({ ok: true });
+});
+
+app.post("/api/instances/release", (req, res) => {
+  const id = String(req.body?.id ?? "").trim();
+  if (id) {
+    activeInstances.delete(id);
+  }
   res.json({ ok: true });
 });
 
@@ -1046,29 +1106,34 @@ app.post(
   })
 );
 
-app.put(
-  "/api/file",
-  asyncRoute(async (req, res) => {
-    const { path: clientPath, content, encoding = "utf8", hasBom = false } = req.body ?? {};
-    if (typeof clientPath !== "string" || typeof content !== "string") {
-      throw createHttpError(400, "缺少 path 或 content");
-    }
+async function saveFileRequest(req, res) {
+  const { path: clientPath, absolutePath, content, encoding = "utf8", hasBom = false } = req.body ?? {};
+  if (typeof clientPath !== "string" || typeof content !== "string") {
+    throw createHttpError(400, "缺少 path 或 content");
+  }
 
-    const encoded = encodeTextContent(content, encoding, Boolean(hasBom));
-    if (encoded.length > maxFileBytes) {
-      throw createHttpError(413, `文件超过 ${Math.round(maxFileBytes / 1024 / 1024)}MB，已阻止保存`);
-    }
+  const encoded = encodeTextContent(content, encoding, Boolean(hasBom));
+  if (encoded.length > maxFileBytes) {
+    throw createHttpError(413, `文件超过 ${Math.round(maxFileBytes / 1024 / 1024)}MB，已阻止保存`);
+  }
 
-    const { absolute, relative } = await getWritableFilePath(clientPath);
-    await fs.writeFile(absolute, encoded);
-    const stat = await fs.stat(absolute);
-    res.json({
-      path: relative,
-      modifiedAt: stat.mtime.toISOString(),
-      size: stat.size
-    });
-  })
-);
+  const { absolute, relative } = await getWritableFileTarget(clientPath, absolutePath);
+  await writeFileAndSync(absolute, encoded);
+  const stat = await fs.stat(absolute);
+  return res.json({
+    path: relative,
+    absolutePath: absolute,
+    name: path.basename(absolute),
+    content,
+    encoding,
+    hasBom: Boolean(hasBom),
+    modifiedAt: stat.mtime.toISOString(),
+    size: stat.size
+  });
+}
+
+app.post("/api/file/save", asyncRoute(saveFileRequest));
+app.put("/api/file", asyncRoute(saveFileRequest));
 
 app.post(
   "/api/file",
@@ -1155,9 +1220,176 @@ app.patch(
   })
 );
 
+app.get("/open-with", (req, res) => {
+  const requestedPath = String(req.query.path ?? req.query.open ?? req.query.file ?? "");
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(`<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FnCode</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #1e1f22;
+        color: #c9d1d9;
+        font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div>正在用 FnCode 打开...</div>
+    <script>
+      (function () {
+        var requestedPath = ${JSON.stringify(requestedPath)};
+        var instanceId =
+          (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||
+          String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+
+        function apiUrl(path) {
+          var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
+          if (proxyIndex >= 0) {
+            return window.location.pathname.slice(0, proxyIndex) + "/proxy.cgi" + path;
+          }
+          return path;
+        }
+
+        function editorUrl(path) {
+          var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
+          var base = proxyIndex >= 0 ? window.location.pathname.slice(0, proxyIndex) + "/proxy.cgi/" : "/";
+          return base + (path ? "?open=" + encodeURIComponent(path) : "");
+        }
+
+        function closeWindow() {
+          try {
+            window.close();
+          } catch (_) {}
+          try {
+            var selfWindow = window.open("", "_self");
+            if (selfWindow) {
+              selfWindow.close();
+            }
+          } catch (_) {}
+          try {
+            var parentWindow = window.parent;
+            var frameElement = window.frameElement;
+            if (!parentWindow || parentWindow === window || !frameElement) {
+              return;
+            }
+            var selectors = [
+              '[aria-label*="关闭"]',
+              '[title*="关闭"]',
+              '[aria-label*="close" i]',
+              '[title*="close" i]',
+              '[class*="close" i]',
+              '[class*="Close"]'
+            ];
+            var current = frameElement;
+            for (var depth = 0; current && current !== parentWindow.document.body && depth < 12; depth += 1) {
+              for (var index = 0; index < selectors.length; index += 1) {
+                var button = current.querySelector(selectors[index]);
+                if (button && !button.hasAttribute("disabled")) {
+                  button.click();
+                  return;
+                }
+              }
+              current = current.parentElement;
+            }
+          } catch (_) {}
+        }
+
+        function fetchJson(url, options) {
+          return fetch(url, options).then(function (response) {
+            if (!response.ok) {
+              throw new Error(response.statusText || "Request failed");
+            }
+            return response.json();
+          });
+        }
+
+        function sleep(ms) {
+          return new Promise(function (resolve) {
+            window.setTimeout(resolve, ms);
+          });
+        }
+
+        async function run() {
+          if (!requestedPath) {
+            window.location.replace(editorUrl(""));
+            return;
+          }
+
+          try {
+            var primary = await fetchJson(
+              apiUrl("/api/instances/primary?sourceId=" + encodeURIComponent(instanceId))
+            );
+            var primaryAge = Number(primary.ageMs == null ? Number.POSITIVE_INFINITY : primary.ageMs);
+            if (primary.active && primaryAge <= 3000) {
+              var requestId = instanceId + "-open";
+              await fetchJson(apiUrl("/api/handoff/open"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  type: "open-file",
+                  id: requestId,
+                  sourceId: instanceId,
+                  path: requestedPath,
+                  createdAt: Date.now()
+                })
+              });
+
+              for (var attempt = 0; attempt < 20; attempt += 1) {
+                await sleep(150);
+                try {
+                  var status = await fetchJson(apiUrl("/api/handoff/status?id=" + encodeURIComponent(requestId)));
+                  if (status.acknowledged) {
+                    closeWindow();
+                    window.setTimeout(closeWindow, 80);
+                    window.setTimeout(closeWindow, 220);
+                    window.setTimeout(closeWindow, 700);
+                    return;
+                  }
+                } catch (_) {}
+              }
+            }
+          } catch (_) {
+            // Fall through and open a normal editor window.
+          }
+
+          window.location.replace(editorUrl(requestedPath));
+        }
+
+        run();
+      })();
+    </script>
+  </body>
+</html>`);
+});
+
 if (isProduction) {
   const distPath = path.join(projectRoot, "dist");
-  app.use(express.static(distPath));
+  app.use((req, res, next) => {
+    if (req.method === "GET" && (req.path === "/" || req.path.endsWith(".html") || !path.extname(req.path))) {
+      res.setHeader("Cache-Control", "no-store");
+    }
+    next();
+  });
+  app.use(
+    express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-store");
+        }
+      }
+    })
+  );
   app.use((req, res, next) => {
     if (req.method !== "GET") {
       next();
