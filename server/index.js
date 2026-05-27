@@ -19,6 +19,23 @@ const restrictRootSelection = ["1", "true", "yes"].includes(
 );
 const handoffTtlMs = 15000;
 const instanceTtlMs = 3000;
+const lfOnlyExtensions = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "ksh",
+  "csh",
+  "env",
+  "service",
+  "timer",
+  "socket",
+  "mount",
+  "automount",
+  "target",
+  "path"
+]);
+const lfOnlyNames = new Set(["dockerfile", "makefile", "rakefile", "gemfile", "procfile"]);
 
 const app = express();
 app.disable("x-powered-by");
@@ -116,6 +133,59 @@ function isPathInside(parentPath, childPath) {
 
 function isFilesystemPermissionError(error) {
   return error?.code === "EACCES" || error?.code === "EPERM";
+}
+
+function getFileExtension(targetPath = "") {
+  const name = path.basename(String(targetPath)).toLowerCase();
+  if (name.startsWith(".env")) {
+    return "env";
+  }
+  const extension = name.includes(".") ? name.split(".").pop() || "" : name;
+  return extension;
+}
+
+function usesLfLineEnding(targetPath = "", content = "") {
+  const name = path.basename(String(targetPath)).toLowerCase();
+  return content.startsWith("#!") || lfOnlyExtensions.has(getFileExtension(targetPath)) || lfOnlyNames.has(name);
+}
+
+function normalizeLineEndingValue(value) {
+  return value === "crlf" || value === "cr" || value === "lf" ? value : undefined;
+}
+
+function detectLineEnding(content = "") {
+  const crlfCount = content.match(/\r\n/g)?.length ?? 0;
+  const withoutCrlf = content.replace(/\r\n/g, "");
+  const lfCount = withoutCrlf.match(/\n/g)?.length ?? 0;
+  const crCount = withoutCrlf.match(/\r/g)?.length ?? 0;
+
+  if (crlfCount === 0 && lfCount === 0 && crCount === 0) {
+    return "lf";
+  }
+
+  if (crlfCount >= lfCount && crlfCount >= crCount) {
+    return "crlf";
+  }
+
+  return lfCount >= crCount ? "lf" : "cr";
+}
+
+function normalizeTextLineEndings(content, lineEnding) {
+  const normalized = content.replace(/\r\n|\r|\n/g, "\n");
+  if (lineEnding === "crlf") {
+    return normalized.replace(/\n/g, "\r\n");
+  }
+  if (lineEnding === "cr") {
+    return normalized.replace(/\n/g, "\r");
+  }
+  return normalized;
+}
+
+function getSaveLineEnding(targetPath, requestedLineEnding, content) {
+  if (usesLfLineEnding(targetPath, content)) {
+    return "lf";
+  }
+  return normalizeLineEndingValue(requestedLineEnding) ?? detectLineEnding(content);
 }
 
 function getConfiguredUserIds() {
@@ -435,6 +505,7 @@ async function readTextFilePayload(real, relative) {
     content: decoded.content,
     encoding: decoded.encoding,
     hasBom: decoded.hasBom,
+    lineEnding: usesLfLineEnding(real, decoded.content) ? "lf" : detectLineEnding(decoded.content),
     modifiedAt: stat.mtime.toISOString(),
     size: stat.size
   };
@@ -1107,26 +1178,29 @@ app.post(
 );
 
 async function saveFileRequest(req, res) {
-  const { path: clientPath, absolutePath, content, encoding = "utf8", hasBom = false } = req.body ?? {};
+  const { path: clientPath, absolutePath, content, encoding = "utf8", hasBom = false, lineEnding } = req.body ?? {};
   if (typeof clientPath !== "string" || typeof content !== "string") {
     throw createHttpError(400, "缺少 path 或 content");
   }
 
-  const encoded = encodeTextContent(content, encoding, Boolean(hasBom));
+  const { absolute, relative } = await getWritableFileTarget(clientPath, absolutePath);
+  const savedLineEnding = getSaveLineEnding(absolute, lineEnding, content);
+  const savedContent = normalizeTextLineEndings(content, savedLineEnding);
+  const encoded = encodeTextContent(savedContent, encoding, Boolean(hasBom));
   if (encoded.length > maxFileBytes) {
     throw createHttpError(413, `文件超过 ${Math.round(maxFileBytes / 1024 / 1024)}MB，已阻止保存`);
   }
 
-  const { absolute, relative } = await getWritableFileTarget(clientPath, absolutePath);
   await writeFileAndSync(absolute, encoded);
   const stat = await fs.stat(absolute);
   return res.json({
     path: relative,
     absolutePath: absolute,
     name: path.basename(absolute),
-    content,
+    content: savedContent,
     encoding,
     hasBom: Boolean(hasBom),
+    lineEnding: savedLineEnding,
     modifiedAt: stat.mtime.toISOString(),
     size: stat.size
   });
@@ -1148,7 +1222,8 @@ app.post(
       throw createHttpError(409, "同名文件已存在");
     }
 
-    await fs.writeFile(absolute, content, "utf8");
+    const savedLineEnding = getSaveLineEnding(absolute, undefined, content);
+    await fs.writeFile(absolute, normalizeTextLineEndings(content, savedLineEnding), "utf8");
     const stat = await fs.stat(absolute);
     res.status(201).json({
       path: relative,

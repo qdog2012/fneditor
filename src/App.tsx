@@ -64,6 +64,7 @@ type OpenFile = {
   language: string;
   encoding?: string;
   hasBom?: boolean;
+  lineEnding?: "lf" | "crlf" | "cr";
 };
 
 type Meta = {
@@ -98,6 +99,7 @@ type FilePayload = {
   size?: number;
   encoding?: string;
   hasBom?: boolean;
+  lineEnding?: "lf" | "crlf" | "cr";
 };
 
 type OpenPathPayload = {
@@ -653,7 +655,8 @@ function toOpenFile(payload: FilePayload): OpenFile {
     modifiedAt: payload.modifiedAt,
     language: getLanguage(payload.path),
     encoding: payload.encoding,
-    hasBom: payload.hasBom
+    hasBom: payload.hasBom,
+    lineEnding: payload.lineEnding
   };
 }
 
@@ -1251,7 +1254,8 @@ export default function App() {
             absolutePath: file.absolutePath,
             content: latestContent,
             encoding: file.encoding,
-            hasBom: file.hasBom
+            hasBom: file.hasBom,
+            lineEnding: file.lineEnding
           })
         });
         setOpenFiles((previous) =>
@@ -1262,7 +1266,10 @@ export default function App() {
                   content: payload.content,
                   savedContent: payload.content,
                   absolutePath: payload.absolutePath || entry.absolutePath,
-                  modifiedAt: payload.modifiedAt
+                  modifiedAt: payload.modifiedAt,
+                  encoding: payload.encoding,
+                  hasBom: payload.hasBom,
+                  lineEnding: payload.lineEnding
                 }
               : entry
           )
@@ -2582,6 +2589,7 @@ export default function App() {
                 key={activeFile.path}
                 filePath={activeFile.path}
                 language={activeFile.language}
+                lineEnding={activeFile.lineEnding}
                 value={activeFile.content}
                 themeMode={themeMode}
                 fontSize={fontSize}

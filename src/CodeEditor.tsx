@@ -36,6 +36,7 @@ export type CodeEditorHandle = {
 type CodeEditorProps = {
   filePath: string;
   language: string;
+  lineEnding?: "lf" | "crlf" | "cr";
   value: string;
   themeMode: "dark" | "light";
   fontSize: number;
@@ -95,6 +96,7 @@ const beforeMount: BeforeMount = (monacoInstance) => {
 export default function CodeEditor({
   filePath,
   language,
+  lineEnding,
   value,
   themeMode,
   fontSize,
@@ -105,6 +107,17 @@ export default function CodeEditor({
   onEditorReady
 }: CodeEditorProps) {
   const disposablesRef = useRef<monaco.IDisposable[]>([]);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  const applyLineEnding = useCallback(
+    (editor: monaco.editor.IStandaloneCodeEditor) => {
+      const model = editor.getModel();
+      model?.setEOL(
+        lineEnding === "crlf" ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF
+      );
+    },
+    [lineEnding]
+  );
 
   useEffect(() => {
     return () => {
@@ -112,9 +125,16 @@ export default function CodeEditor({
         disposable.dispose();
       }
       disposablesRef.current = [];
+      editorRef.current = null;
       onEditorReady(null);
     };
   }, [onEditorReady]);
+
+  useEffect(() => {
+    if (editorRef.current) {
+      applyLineEnding(editorRef.current);
+    }
+  }, [applyLineEnding]);
 
   const onEditorMount: OnMount = useCallback(
     (editor) => {
@@ -122,6 +142,8 @@ export default function CodeEditor({
         disposable.dispose();
       }
       disposablesRef.current = [];
+      editorRef.current = editor;
+      applyLineEnding(editor);
 
       onEditorReady({
         filePath,
@@ -144,7 +166,7 @@ export default function CodeEditor({
         })
       );
     },
-    [filePath, onCursorChange, onEditorReady, onSave]
+    [applyLineEnding, filePath, onCursorChange, onEditorReady, onSave]
   );
 
   return (
