@@ -1,5 +1,5 @@
 appname=fncode
-version=0.1.50
+version=0.1.51
 display_name=FnCode
 desc="""FnCode 是一款为飞牛 fnOS 文件管理器设计的轻量代码编辑器，采用接近 VS Code 的操作体验，支持在“我的文件”目录内浏览文件树、搜索文件名和内容、多标签编辑、右键文件操作、快捷键保存、深色/浅色主题切换，以及通过文件管理器“打开方式”直接打开常见文本和代码文件。适合在 NAS 上快速查看、修改配置文件、脚本、日志和项目代码。"""
 platform=x86
@@ -13,4 +13,4 @@ desktop_applaunchname=fncode.Application
 service_port=39280
 checkport=true
 disable_authorization_path=false
-changelog=Inherit parent directory ownership for newly created files and folders so root-run service writes user-owned files.
+changelog=Show the current FnCode version in the settings panel.
