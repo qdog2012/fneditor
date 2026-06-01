@@ -11,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const isProduction = process.env.NODE_ENV === "production";
-const port = Number.parseInt(process.env.PORT ?? "8080", 10);
+const port = Number.parseInt(process.env.PORT ?? "39280", 10);
 const maxFileBytes = Number.parseInt(process.env.FNEDITOR_MAX_FILE_BYTES ?? String(5 * 1024 * 1024), 10);
 const statePath = path.resolve(process.env.FNEDITOR_STATE_PATH ?? path.join(projectRoot, ".fneditor-state.json"));
 const restrictRootSelection = ["1", "true", "yes"].includes(

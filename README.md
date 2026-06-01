@@ -13,7 +13,7 @@ npm install
 npm run dev
 ```
 
-默认监听 `http://localhost:8080`。开发时可用环境变量指定文件根目录：
+默认监听 `http://localhost:39280`。开发时可用环境变量指定文件根目录：
 
 ```bash
 FNEDITOR_ROOT=/path/to/my/files npm run dev
@@ -43,7 +43,7 @@ services:
     container_name: fneditor
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "39280:39280"
     environment:
       - FNEDITOR_ROOT=/data
     volumes:

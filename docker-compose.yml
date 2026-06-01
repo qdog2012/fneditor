@@ -4,7 +4,7 @@ services:
     container_name: fneditor
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "39280:39280"
     environment:
       - FNEDITOR_ROOT=/data
     volumes:
