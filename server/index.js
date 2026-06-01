@@ -59,7 +59,7 @@ app.use((req, res, next) => {
 const handoffClients = new Set();
 const handoffRequests = new Map();
 const activeInstances = new Map();
-const appVersion = process.env.FNCODE_VERSION || process.env.FNEDITOR_VERSION || (await readPackageVersion());
+const appVersion = process.env.FNCODE_VERSION || process.env.FNEDITOR_VERSION || (await readAppVersion());
 
 const asyncRoute = (handler) => (req, res, next) => {
   Promise.resolve(handler(req, res, next)).catch(next);
@@ -71,14 +71,45 @@ function createHttpError(status, message) {
   return error;
 }
 
-async function readPackageVersion() {
-  try {
-    const raw = await fs.readFile(path.join(projectRoot, "package.json"), "utf8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed.version === "string" && parsed.version ? parsed.version : "unknown";
-  } catch {
-    return "unknown";
+async function readAppVersion() {
+  const packageCandidates = [
+    path.join(projectRoot, "package.json"),
+    path.join(projectRoot, "..", "package.json"),
+    path.join(projectRoot, "server", "package.json")
+  ];
+  for (const candidate of packageCandidates) {
+    try {
+      const raw = await fs.readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.version === "string" && parsed.version) {
+        return parsed.version;
+      }
+    } catch {
+      // Try the next installed layout.
+    }
   }
+
+  const manifestCandidates = [
+    path.join(projectRoot, "manifest"),
+    path.join(projectRoot, "..", "manifest"),
+    path.join(projectRoot, "..", "..", "manifest")
+  ];
+  for (const candidate of manifestCandidates) {
+    try {
+      const raw = await fs.readFile(candidate, "utf8");
+      const version = raw
+        .split(/\r?\n/)
+        .map((line) => line.match(/^version=(.+)$/)?.[1]?.trim())
+        .find(Boolean);
+      if (version) {
+        return version;
+      }
+    } catch {
+      // Try the next installed layout.
+    }
+  }
+
+  return "unknown";
 }
 
 function cleanupHandoffRequests() {
@@ -1336,7 +1367,7 @@ app.get("/open-with", (req, res) => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FnCode</title>
+    <title>FnEditor</title>
     <style>
       html,
       body {
@@ -1353,7 +1384,7 @@ app.get("/open-with", (req, res) => {
     </style>
   </head>
   <body>
-    <div>正在用 FnCode 打开...</div>
+    <div>正在用 FnEditor 打开...</div>
     <script>
       (function () {
         var requestedPath = ${JSON.stringify(requestedPath)};

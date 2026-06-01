@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-APP_HOME="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_APP_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
+APP_HOME="${TRIM_APPDEST:-$SCRIPT_APP_HOME}"
 SERVER_DIR="${APP_HOME}/server"
 DATA_DIR="${TRIM_USERDATA:-${APP_HOME}/data}"
 NODE_BIN="${SERVER_DIR}/runtime/node/bin/node"
@@ -10,7 +12,29 @@ LOG_FILE="${DATA_DIR}/fncode.log"
 
 PORT="${FNCODE_PORT:-${FNEDITOR_PORT:-${TRIM_SERVICE_PORT:-39280}}}"
 STATE_PATH="${FNCODE_STATE_PATH:-${FNEDITOR_STATE_PATH:-${DATA_DIR}/state.json}}"
-APP_VERSION="$(sed -n 's/^version=//p' "${APP_HOME}/manifest" 2>/dev/null | head -n 1 || true)"
+read_manifest_version() {
+  for candidate in \
+    "${APP_HOME}/manifest" \
+    "${TRIM_APPDEST:-}/manifest" \
+    "${SCRIPT_APP_HOME}/manifest" \
+    "${APP_HOME}/server/package.json" \
+    "${SCRIPT_APP_HOME}/app/server/package.json"; do
+    [ -n "$candidate" ] || continue
+    [ -f "$candidate" ] || continue
+    case "$candidate" in
+      *.json)
+        version="$("$NODE_BIN" -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (p.version) process.stdout.write(p.version);" "$candidate" 2>/dev/null || true)"
+        [ -n "$version" ] && { printf '%s\n' "$version"; return 0; }
+        ;;
+      *)
+        version="$(sed -n 's/^version=//p' "$candidate" 2>/dev/null | head -n 1 || true)"
+        [ -n "$version" ] && { printf '%s\n' "$version"; return 0; }
+        ;;
+    esac
+  done
+  return 1
+}
+APP_VERSION="${FNCODE_VERSION:-${FNEDITOR_VERSION:-$(read_manifest_version || true)}}"
 
 has_entries() {
   [ -d "$1" ] || return 1
@@ -104,7 +128,7 @@ start_app() {
   sleep 2
 
   if ! is_running; then
-    echo "FnCode failed to start, see $LOG_FILE" >&2
+    echo "FnEditor failed to start, see $LOG_FILE" >&2
     exit 1
   fi
 }

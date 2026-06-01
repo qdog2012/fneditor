@@ -2212,7 +2212,7 @@ export default function App() {
             </div>
             <div className="setting-row">
               <span>版本</span>
-              <span className="setting-value">FnCode {meta?.version ?? "unknown"}</span>
+              <span className="setting-value">FnEditor {meta?.version ?? "unknown"}</span>
             </div>
           </div>
         </>
@@ -2447,10 +2447,10 @@ export default function App() {
   if (shouldUseExternalSecondaryMode) {
     const text =
       secondaryOpenStatus === "opened"
-        ? "已在已打开的 FnCode 窗口中新建标签，可关闭此窗口。"
+        ? "已在已打开的 FnEditor 窗口中新建标签，可关闭此窗口。"
         : secondaryOpenStatus === "failed"
-          ? "已发送到已打开的 FnCode 窗口。若没有自动关闭，可手动关闭此窗口。"
-          : "正在发送到已打开的 FnCode 窗口...";
+          ? "已发送到已打开的 FnEditor 窗口。若没有自动关闭，可手动关闭此窗口。"
+          : "正在发送到已打开的 FnEditor 窗口...";
     return (
       <div className={`handoff-screen theme-${themeMode}`}>
         <div className="handoff-message">{text}</div>
@@ -2461,7 +2461,7 @@ export default function App() {
   if (handoffState !== "none") {
     return (
       <div className={`handoff-screen theme-${themeMode}`}>
-        <div className="handoff-message">正在加入已打开的 FnCode 窗口...</div>
+        <div className="handoff-message">正在加入已打开的 FnEditor 窗口...</div>
       </div>
     );
   }
@@ -2609,7 +2609,7 @@ export default function App() {
               <div className="welcome-mark">
                 <TerminalSquare size={42} aria-hidden="true" />
               </div>
-              <h1>FnCode</h1>
+              <h1>FnEditor</h1>
               <p>左侧已连接到当前配置的“我的文件”目录。选择一个文本文件开始编辑。</p>
               <div className="welcome-actions">
                 <button type="button" onClick={() => void createFile()}>
