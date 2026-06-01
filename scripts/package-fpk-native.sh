@@ -3,10 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-fncode}"
+PACKAGE_NAME="${PACKAGE_NAME:-fneditor}"
 VERSION="${VERSION:-$(grep -m1 '^version=' "${ROOT_DIR}/packaging/fpk-native/manifest" | cut -d= -f2-)}"
 STAGE_DIR="${STAGE_DIR:-${ROOT_DIR}/build/fpk-native/${APP_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/build/fpk-output}"
-OUTPUT_FILE="${OUTPUT_FILE:-${OUTPUT_DIR}/${APP_NAME}-${VERSION}.fpk}"
+OUTPUT_FILE="${OUTPUT_FILE:-${OUTPUT_DIR}/${PACKAGE_NAME}-${VERSION}.fpk}"
 
 if [ ! -d "$STAGE_DIR/app" ]; then
   echo "Missing app directory in staging path: $STAGE_DIR" >&2
