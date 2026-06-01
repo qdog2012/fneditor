@@ -68,6 +68,7 @@ type OpenFile = {
 };
 
 type Meta = {
+  version: string;
   rootLabel: string;
   rootPath: string;
   maxFileBytes: number;
@@ -2209,6 +2210,10 @@ export default function App() {
                 <Check size={13} aria-hidden="true" />
               </button>
             </div>
+            <div className="setting-row">
+              <span>版本</span>
+              <span className="setting-value">FnCode {meta?.version ?? "unknown"}</span>
+            </div>
           </div>
         </>
       );
@@ -2586,7 +2591,6 @@ export default function App() {
           {activeFile ? (
             <Suspense fallback={<div className="editor-loading">正在加载编辑器...</div>}>
               <CodeEditor
-                key={activeFile.path}
                 filePath={activeFile.path}
                 language={activeFile.language}
                 lineEnding={activeFile.lineEnding}

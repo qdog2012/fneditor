@@ -119,6 +119,17 @@ export default function CodeEditor({
     [lineEnding]
   );
 
+  const publishEditorHandle = useCallback(
+    (editor: monaco.editor.IStandaloneCodeEditor) => {
+      onEditorReady({
+        filePath,
+        layout: () => editor.layout(),
+        getValue: () => editor.getValue()
+      });
+    },
+    [filePath, onEditorReady]
+  );
+
   useEffect(() => {
     return () => {
       for (const disposable of disposablesRef.current) {
@@ -136,6 +147,12 @@ export default function CodeEditor({
     }
   }, [applyLineEnding]);
 
+  useEffect(() => {
+    if (editorRef.current) {
+      publishEditorHandle(editorRef.current);
+    }
+  }, [publishEditorHandle]);
+
   const onEditorMount: OnMount = useCallback(
     (editor) => {
       for (const disposable of disposablesRef.current) {
@@ -144,12 +161,7 @@ export default function CodeEditor({
       disposablesRef.current = [];
       editorRef.current = editor;
       applyLineEnding(editor);
-
-      onEditorReady({
-        filePath,
-        layout: () => editor.layout(),
-        getValue: () => editor.getValue()
-      });
+      publishEditorHandle(editor);
 
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
         onSave();
@@ -166,7 +178,7 @@ export default function CodeEditor({
         })
       );
     },
-    [applyLineEnding, filePath, onCursorChange, onEditorReady, onSave]
+    [applyLineEnding, onCursorChange, onSave, publishEditorHandle]
   );
 
   return (
@@ -178,6 +190,7 @@ export default function CodeEditor({
       path={filePath}
       value={value}
       onChange={onChange}
+      saveViewState
       options={{
         automaticLayout: true,
         cursorBlinking: "smooth",

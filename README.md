@@ -1,6 +1,6 @@
 # FnCode
 
-一个适合部署在 fnOS / 飞牛 NAS 的 Web 代码编辑器。界面采用 VSCode 风格，左侧默认显示配置根目录下的“我的文件”，编辑器使用 Monaco，并关闭 minimap。
+一个适合部署在 fnOS / 飞牛 NAS 的 Web 代码编辑器。界面采用 VSCode 风格，左侧目录列表，右侧文件内容。
 
 ## 本地开发
 

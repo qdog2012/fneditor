@@ -59,6 +59,7 @@ app.use((req, res, next) => {
 const handoffClients = new Set();
 const handoffRequests = new Map();
 const activeInstances = new Map();
+const appVersion = process.env.FNCODE_VERSION || process.env.FNEDITOR_VERSION || (await readPackageVersion());
 
 const asyncRoute = (handler) => (req, res, next) => {
   Promise.resolve(handler(req, res, next)).catch(next);
@@ -68,6 +69,16 @@ function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+async function readPackageVersion() {
+  try {
+    const raw = await fs.readFile(path.join(projectRoot, "package.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed.version === "string" && parsed.version ? parsed.version : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function cleanupHandoffRequests() {
@@ -124,6 +135,21 @@ async function readState() {
 async function writeState(nextState) {
   await fs.mkdir(path.dirname(statePath), { recursive: true });
   await fs.writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+}
+
+async function inheritParentOwnership(targetPath) {
+  if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() !== 0)) {
+    return;
+  }
+
+  try {
+    const parentStat = await fs.stat(path.dirname(targetPath));
+    await fs.chown(targetPath, parentStat.uid, parentStat.gid);
+  } catch (error) {
+    if (!["EACCES", "EINVAL", "ENOSYS", "EPERM", "EROFS"].includes(error?.code)) {
+      throw error;
+    }
+  }
 }
 
 function isPathInside(parentPath, childPath) {
@@ -372,6 +398,7 @@ let rootLabel = process.env.FNEDITOR_ROOT_LABEL || path.basename(rootPath) || ro
 
 function getMetaPayload() {
   return {
+    version: appVersion,
     rootLabel,
     rootPath,
     maxFileBytes
@@ -1191,7 +1218,11 @@ async function saveFileRequest(req, res) {
     throw createHttpError(413, `文件超过 ${Math.round(maxFileBytes / 1024 / 1024)}MB，已阻止保存`);
   }
 
+  const shouldInheritOwnership = !(await exists(absolute));
   await writeFileAndSync(absolute, encoded);
+  if (shouldInheritOwnership) {
+    await inheritParentOwnership(absolute);
+  }
   const stat = await fs.stat(absolute);
   return res.json({
     path: relative,
@@ -1224,6 +1255,7 @@ app.post(
 
     const savedLineEnding = getSaveLineEnding(absolute, undefined, content);
     await fs.writeFile(absolute, normalizeTextLineEndings(content, savedLineEnding), "utf8");
+    await inheritParentOwnership(absolute);
     const stat = await fs.stat(absolute);
     res.status(201).json({
       path: relative,
@@ -1243,6 +1275,7 @@ app.post(
 
     const { absolute, relative } = await getWritablePath(clientPath);
     await fs.mkdir(absolute, { recursive: false });
+    await inheritParentOwnership(absolute);
     res.status(201).json({ path: relative });
   })
 );
