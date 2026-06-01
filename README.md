@@ -4,6 +4,8 @@
 
 开源地址：https://github.com/qdog2012/fneditor
 
+![FnEditor 界面截图](./fneditor.png)
+
 ## 本地开发
 
 ```bash
