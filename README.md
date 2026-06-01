@@ -2,6 +2,8 @@
 
 一个适合部署在 fnOS / 飞牛 NAS 的 Web 代码编辑器。界面采用 VSCode 风格，左侧目录列表，右侧文件内容。
 
+开源地址：https://github.com/qdog2012/fneditor
+
 ## 本地开发
 
 ```bash
