@@ -1184,12 +1184,19 @@ app.post(
       throw createHttpError(400, "缺少打开请求参数");
     }
 
+    const now = Date.now();
+    const requestedCreatedAt = Number(req.body?.createdAt);
+    const createdAt =
+      Number.isFinite(requestedCreatedAt) && Math.abs(now - requestedCreatedAt) <= handoffTtlMs
+        ? requestedCreatedAt
+        : now;
+
     const request = {
       type: "open-file",
       id,
       sourceId,
       path: requestedPath,
-      createdAt: Date.now(),
+      createdAt,
       acknowledged: false
     };
     handoffRequests.set(id, request);
@@ -1406,6 +1413,16 @@ app.get("/open-with", (req, res) => {
           return base + (path ? "?open=" + encodeURIComponent(path) : "");
         }
 
+        function parkOpenWithUrl() {
+          try {
+            window.history.replaceState(
+              null,
+              document.title,
+              window.location.pathname + "?handoff=" + encodeURIComponent(instanceId)
+            );
+          } catch (_) {}
+        }
+
         function closeWindow() {
           try {
             window.close();
@@ -1464,6 +1481,7 @@ app.get("/open-with", (req, res) => {
             window.location.replace(editorUrl(""));
             return;
           }
+          parkOpenWithUrl();
 
           try {
             var primary = await fetchJson(
@@ -1471,7 +1489,9 @@ app.get("/open-with", (req, res) => {
             );
             var primaryAge = Number(primary.ageMs == null ? Number.POSITIVE_INFINITY : primary.ageMs);
             if (primary.active && primaryAge <= 3000) {
-              var requestId = instanceId + "-open";
+              var requestCreatedAt = Date.now();
+              var requestId =
+                instanceId + "-open-" + requestCreatedAt + "-" + Math.random().toString(36).slice(2);
               await fetchJson(apiUrl("/api/handoff/open"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1480,7 +1500,7 @@ app.get("/open-with", (req, res) => {
                   id: requestId,
                   sourceId: instanceId,
                   path: requestedPath,
-                  createdAt: Date.now()
+                  createdAt: requestCreatedAt
                 })
               });
 

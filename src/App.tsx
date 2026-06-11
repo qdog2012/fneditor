@@ -221,6 +221,7 @@ const EXTERNAL_OPEN_PARAM_KEYS = ["open", "file", "path", "filepath", "filePath"
 const INSTANCE_HEARTBEAT_MS = 1200;
 const INSTANCE_TTL_MS = 4500;
 const HANDOFF_ACK_TIMEOUT_MS = 1200;
+const HANDLED_MESSAGE_TTL_MS = 30000;
 const INSTANCE_STORAGE_KEY = "fncode.activeInstance";
 const INSTANCE_MESSAGE_KEY = "fncode.instanceMessage";
 const INSTANCE_CHANNEL_NAME = "fncode.instance";
@@ -339,6 +340,10 @@ function safeParseInstanceMessage(value: unknown) {
   } catch {
     return null;
   }
+}
+
+function getOpenFileMessageKey(message: Extract<InstanceMessage, { type: "open-file" }>) {
+  return `${message.id}:${message.createdAt}`;
 }
 
 function postInstanceMessage(message: InstanceMessage) {
@@ -532,6 +537,25 @@ function getExternalOpenPathFromLocation(location: Location) {
   }
 
   return "";
+}
+
+function clearExternalOpenParamsFromLocation() {
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+    for (const key of EXTERNAL_OPEN_PARAM_KEYS) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
+    }
+  } catch {
+    // Keeping the original URL is harmless; it only affects repeated same-file launches in reused frames.
+  }
 }
 
 function resolveApiUrl(url: string) {
@@ -787,7 +811,7 @@ export default function App() {
   const externalOpenHandledRef = useRef(false);
   const instanceIdRef = useRef(CURRENT_INSTANCE_ID);
   const isPrimaryInstanceRef = useRef(false);
-  const handledInstanceMessageIdsRef = useRef(new Set<string>());
+  const handledOpenMessageKeysRef = useRef(new Map<string, number>());
   const sidebarVisibleRef = useRef(sidebarVisible);
   const skipNextSidebarVisiblePersistRef = useRef(Boolean(initialExternalOpenPath));
   const searchAbortRef = useRef<AbortController | null>(null);
@@ -1291,6 +1315,50 @@ export default function App() {
     [refreshDirectory, showMessage]
   );
 
+  const reloadFile = useCallback(
+    async (pathName: string) => {
+      const file = openFilesRef.current.find((entry) => entry.path === pathName);
+      if (!file) {
+        return;
+      }
+
+      const editor = editorRef.current;
+      const latestContent = editor?.filePath === pathName ? editor.getValue() : file.content;
+      if (latestContent !== file.savedContent) {
+        const shouldReload = window.confirm(`${file.name} 尚未保存，重新加载会丢弃当前修改，继续？`);
+        if (!shouldReload) {
+          return;
+        }
+      }
+
+      try {
+        const payload = await apiRequest<FilePayload>(`/api/file?path=${encodeURIComponent(file.path)}`);
+        const reloadedFile = toOpenFile(payload);
+        setOpenFiles((previous) =>
+          previous.map((entry) =>
+            entry.path === file.path
+              ? {
+                  ...reloadedFile,
+                  absolutePath: reloadedFile.absolutePath || entry.absolutePath
+                }
+              : entry
+          )
+        );
+        setActivePath(reloadedFile.path);
+        setSelectedEntry({ path: reloadedFile.path, type: "file" });
+        try {
+          await refreshDirectory(getParentPath(reloadedFile.path));
+        } catch {
+          // Reloading succeeded; refreshing the explorer can fail if the file is outside the current root.
+        }
+        showMessage(`已重新加载 ${reloadedFile.absolutePath || file.absolutePath || reloadedFile.name}`);
+      } catch (error) {
+        showMessage(error instanceof Error ? error.message : "重新加载失败");
+      }
+    },
+    [refreshDirectory, showMessage]
+  );
+
   useEffect(() => {
     saveFileRef.current = saveFile;
   }, [saveFile]);
@@ -1530,16 +1598,27 @@ export default function App() {
         !message ||
         message.type !== "open-file" ||
         message.sourceId === instanceIdRef.current ||
-        handledInstanceMessageIdsRef.current.has(message.id) ||
         !isPrimaryInstanceRef.current
       ) {
         return;
       }
 
-      handledInstanceMessageIdsRef.current.add(message.id);
+      const now = Date.now();
+      for (const [key, handledAt] of handledOpenMessageKeysRef.current) {
+        if (now - handledAt > HANDLED_MESSAGE_TTL_MS) {
+          handledOpenMessageKeysRef.current.delete(key);
+        }
+      }
+
+      const messageKey = getOpenFileMessageKey(message);
+      if (handledOpenMessageKeysRef.current.has(messageKey)) {
+        return;
+      }
+
+      handledOpenMessageKeysRef.current.set(messageKey, now);
       void openExternalAbsolutePath(message.path).then((opened) => {
         if (!opened) {
-          handledInstanceMessageIdsRef.current.delete(message.id);
+          handledOpenMessageKeysRef.current.delete(messageKey);
           return;
         }
 
@@ -1615,6 +1694,7 @@ export default function App() {
       setSecondaryOpenStatus("failed");
       return;
     }
+    clearExternalOpenParamsFromLocation();
 
     const request: Extract<InstanceMessage, { type: "open-file" }> = {
       type: "open-file",
@@ -1711,7 +1791,11 @@ export default function App() {
       return;
     }
 
-    void openExternalAbsolutePath(externalPath);
+    void openExternalAbsolutePath(externalPath).then((opened) => {
+      if (opened) {
+        clearExternalOpenParamsFromLocation();
+      }
+    });
   }, [externalOpenRole, handoffState, initialExternalOpenPath, meta, openExternalAbsolutePath]);
 
   const renameEntry = useCallback(
@@ -2317,6 +2401,9 @@ export default function App() {
       >
         <button type="button" disabled={!isDirty} onClick={() => runContextMenuAction(() => saveFile(file.path))}>
           <Save size={14} /> 保存
+        </button>
+        <button type="button" onClick={() => runContextMenuAction(() => reloadFile(file.path))}>
+          <RefreshCw size={14} /> 重新加载文件
         </button>
         <button type="button" onClick={() => runContextMenuAction(() => closeTab(file.path))}>
           <X size={14} /> 关闭
