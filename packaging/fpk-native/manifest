@@ -1,5 +1,5 @@
 appname=fncode
-version=0.1.71
+version=0.1.72
 display_name=FnEditor
 desc="""FnEditor 是一款为飞牛 fnOS 文件管理器设计的轻量代码编辑器，采用接近 VS Code 的操作体验，支持在“我的文件”目录内浏览文件树、搜索文件名和内容、多标签编辑、右键文件操作、快捷键保存、深色/浅色主题切换，以及通过文件管理器“打开方式”直接打开常见文本和代码文件。适合在 NAS 上快速查看、修改配置文件、脚本、日志和项目代码。开源地址：<a href='https://github.com/qdog2012/fneditor'>https://github.com/qdog2012/fneditor</a>"""
 platform=x86
@@ -13,4 +13,4 @@ desktop_applaunchname=fncode.Application
 service_port=39280
 checkport=true
 disable_authorization_path=false
-changelog=Ignore stale handoffs when quickly reopening the first file after another file.
+changelog=Add a settings toggle that keeps diagnostic logging disabled by default.

@@ -61,6 +61,7 @@ const handoffClients = new Set();
 const handoffRequests = new Map();
 const activeInstances = new Map();
 const diagnosticEvents = [];
+let diagnosticLoggingEnabled = false;
 const appVersion = process.env.FNCODE_VERSION || process.env.FNEDITOR_VERSION || (await readAppVersion());
 
 const asyncRoute = (handler) => (req, res, next) => {
@@ -137,6 +138,32 @@ function sendHandoffEvent(client, event, data) {
   client.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function parseBooleanSetting(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1 ? true : value === 0 ? false : null;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return null;
+}
+
+function syncDiagnosticLoggingFromRequest(req) {
+  const parsed = parseBooleanSetting(req.body?.debugLoggingEnabled ?? req.query?.debugLoggingEnabled);
+  if (parsed !== null) {
+    diagnosticLoggingEnabled = parsed;
+  }
+}
+
 function sanitizeDiagnosticValue(value, depth = 0) {
   if (value === null || value === undefined) {
     return value ?? null;
@@ -161,6 +188,10 @@ function sanitizeDiagnosticValue(value, depth = 0) {
 }
 
 function addDiagnosticEvent(source, event, data = {}) {
+  if (!diagnosticLoggingEnabled) {
+    return null;
+  }
+
   const item = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     createdAt: new Date().toISOString(),
@@ -208,6 +239,8 @@ async function writeState(nextState) {
   await fs.mkdir(path.dirname(statePath), { recursive: true });
   await fs.writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
 }
+
+diagnosticLoggingEnabled = (await readState()).debugLoggingEnabled === true;
 
 async function inheritParentOwnership(targetPath) {
   if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() !== 0)) {
@@ -473,7 +506,8 @@ function getMetaPayload() {
     version: appVersion,
     rootLabel,
     rootPath,
-    maxFileBytes
+    maxFileBytes,
+    debugLoggingEnabled: diagnosticLoggingEnabled
   };
 }
 
@@ -1024,6 +1058,7 @@ app.post(
 app.post(
   "/api/instances/claim",
   asyncRoute(async (req, res) => {
+    syncDiagnosticLoggingFromRequest(req);
     cleanupActiveInstances();
     const id = String(req.body?.id ?? "").trim();
     if (!id) {
@@ -1051,6 +1086,7 @@ app.post(
 );
 
 app.get("/api/instances/primary", (req, res) => {
+  syncDiagnosticLoggingFromRequest(req);
   cleanupActiveInstances();
   const sourceId = String(req.query.sourceId ?? "").trim();
   const primary = [...activeInstances.values()]
@@ -1229,6 +1265,7 @@ app.get("/api/handoff/events", (req, res) => {
 app.post(
   "/api/handoff/open",
   asyncRoute(async (req, res) => {
+    syncDiagnosticLoggingFromRequest(req);
     cleanupHandoffRequests();
     const id = String(req.body?.id ?? "").trim();
     const sourceId = String(req.body?.sourceId ?? "").trim();
@@ -1281,6 +1318,7 @@ app.get("/api/handoff/pending", (req, res) => {
 app.post(
   "/api/handoff/ack",
   asyncRoute(async (req, res) => {
+    syncDiagnosticLoggingFromRequest(req);
     cleanupHandoffRequests();
     const id = String(req.body?.id ?? "").trim();
     if (!id) {
@@ -1297,18 +1335,42 @@ app.post(
   })
 );
 
+app.get("/api/diagnostics/settings", (_req, res) => {
+  res.json({ enabled: diagnosticLoggingEnabled });
+});
+
+app.put(
+  "/api/diagnostics/settings",
+  asyncRoute(async (req, res) => {
+    const enabled = parseBooleanSetting(req.body?.enabled);
+    if (enabled === null) {
+      throw createHttpError(400, "缺少调试日志开关状态");
+    }
+
+    diagnosticLoggingEnabled = enabled;
+    const state = await readState();
+    await writeState({
+      ...state,
+      debugLoggingEnabled: enabled,
+      updatedAt: new Date().toISOString()
+    });
+    res.json({ ok: true, enabled: diagnosticLoggingEnabled });
+  })
+);
+
 app.post(
   "/api/diagnostics/events",
   asyncRoute(async (req, res) => {
+    syncDiagnosticLoggingFromRequest(req);
     const source = req.body?.source;
     const event = req.body?.event;
-    addDiagnosticEvent(source, event, req.body?.data ?? {});
-    res.json({ ok: true });
+    const item = addDiagnosticEvent(source, event, req.body?.data ?? {});
+    res.json({ ok: true, enabled: diagnosticLoggingEnabled, recorded: Boolean(item) });
   })
 );
 
 app.get("/api/diagnostics/events", (_req, res) => {
-  res.json({ items: diagnosticEvents });
+  res.json({ enabled: diagnosticLoggingEnabled, items: diagnosticEvents });
 });
 
 app.get("/api/diagnostics/events.txt", (_req, res) => {
@@ -1482,6 +1544,7 @@ app.get("/open-with", (req, res) => {
       (function () {
         var requestedPath = ${JSON.stringify(requestedPath)};
         var launchContextStorageKey = "fncode.launchContext";
+        var debugLoggingStorageKey = "fncode.debugLogging";
         var instanceId =
           (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||
           String(Date.now()) + "-" + Math.random().toString(36).slice(2);
@@ -1495,11 +1558,24 @@ app.get("/open-with", (req, res) => {
           return path;
         }
 
+        function isDebugLoggingEnabled() {
+          try {
+            return window.localStorage.getItem(debugLoggingStorageKey) === "true";
+          } catch (_) {
+            return false;
+          }
+        }
+
         function postDiagnostic(event, data) {
+          if (!isDebugLoggingEnabled()) {
+            return;
+          }
+
           try {
             var payload = JSON.stringify({
               source: "open-with",
               event: event,
+              debugLoggingEnabled: true,
               data: Object.assign(
                 {
                   instanceId: instanceId,
@@ -1537,7 +1613,8 @@ app.get("/open-with", (req, res) => {
             id: instanceId + "-open-" + createdAt + "-" + Math.random().toString(36).slice(2),
             sourceId: instanceId,
             path: path,
-            createdAt: createdAt
+            createdAt: createdAt,
+            debugLoggingEnabled: isDebugLoggingEnabled()
           };
         }
 

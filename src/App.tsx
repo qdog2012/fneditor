@@ -72,6 +72,7 @@ type Meta = {
   rootLabel: string;
   rootPath: string;
   maxFileBytes: number;
+  debugLoggingEnabled?: boolean;
 };
 
 type SelectedEntry = {
@@ -227,6 +228,7 @@ const INSTANCE_STORAGE_KEY = "fncode.activeInstance";
 const INSTANCE_MESSAGE_KEY = "fncode.instanceMessage";
 const INSTANCE_CHANNEL_NAME = "fncode.instance";
 const LAUNCH_CONTEXT_STORAGE_KEY = "fncode.launchContext";
+const DEBUG_LOGGING_STORAGE_KEY = "fncode.debugLogging";
 const WINDOW_LAUNCH_CONTEXT_PREFIX = "fncode-launch:";
 const CURRENT_INSTANCE_ID = createInstanceId();
 
@@ -667,7 +669,19 @@ function resolveApiUrl(url: string) {
   return relativeUrl;
 }
 
+function isDiagnosticLoggingEnabled() {
+  try {
+    return window.localStorage.getItem(DEBUG_LOGGING_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function postDiagnosticEvent(event: string, data: Record<string, unknown> = {}) {
+  if (!isDiagnosticLoggingEnabled()) {
+    return;
+  }
+
   if (!INITIAL_EXTERNAL_OPEN_PATH && !INITIAL_FOCUS_FALLBACK_EXTERNAL_OPEN_PATH && event !== "manual-diagnostics") {
     return;
   }
@@ -676,6 +690,7 @@ function postDiagnosticEvent(event: string, data: Record<string, unknown> = {}) 
     const body = JSON.stringify({
       source: "app",
       event,
+      debugLoggingEnabled: true,
       data: {
         instanceId: CURRENT_INSTANCE_ID,
         initialExternalOpenPath: INITIAL_EXTERNAL_OPEN_PATH,
@@ -736,17 +751,24 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function updateServerDiagnosticLogging(enabled: boolean) {
+  await apiRequest<{ ok: boolean; enabled: boolean }>("/api/diagnostics/settings", {
+    method: "PUT",
+    body: JSON.stringify({ enabled })
+  });
+}
+
 async function postServerHandoffRequest(request: Extract<InstanceMessage, { type: "open-file" }>) {
   await apiRequest<{ ok: boolean }>("/api/handoff/open", {
     method: "POST",
-    body: JSON.stringify(request)
+    body: JSON.stringify({ ...request, debugLoggingEnabled: isDiagnosticLoggingEnabled() })
   });
 }
 
 async function acknowledgeServerHandoff(requestId: string) {
   await apiRequest<{ ok: boolean }>("/api/handoff/ack", {
     method: "POST",
-    body: JSON.stringify({ id: requestId })
+    body: JSON.stringify({ id: requestId, debugLoggingEnabled: isDiagnosticLoggingEnabled() })
   });
 }
 
@@ -800,13 +822,14 @@ async function sendServerInstanceHeartbeat(instanceId: string) {
 async function claimServerPrimaryInstance(instanceId: string) {
   return apiRequest<{ active: boolean; id: string; ageMs?: number }>("/api/instances/claim", {
     method: "POST",
-    body: JSON.stringify({ id: instanceId })
+    body: JSON.stringify({ id: instanceId, debugLoggingEnabled: isDiagnosticLoggingEnabled() })
   });
 }
 
 async function getServerPrimaryInstance(instanceId: string) {
+  const debugLoggingEnabled = isDiagnosticLoggingEnabled() ? "1" : "0";
   return apiRequest<{ active: boolean; id: string; ageMs?: number }>(
-    `/api/instances/primary?sourceId=${encodeURIComponent(instanceId)}`
+    `/api/instances/primary?sourceId=${encodeURIComponent(instanceId)}&debugLoggingEnabled=${debugLoggingEnabled}`
   );
 }
 
@@ -970,6 +993,7 @@ export default function App() {
   const [wordWrap, setWordWrap] = useState<"on" | "off">(() =>
     window.localStorage.getItem("fncode.wordWrap") === "off" ? "off" : "on"
   );
+  const [debugLoggingEnabled, setDebugLoggingEnabled] = useState(() => isDiagnosticLoggingEnabled());
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const storedTheme = window.localStorage.getItem("fncode.theme");
     return storedTheme === "light" ? "light" : "dark";
@@ -1209,6 +1233,16 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("fncode.wordWrap", wordWrap);
   }, [wordWrap]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DEBUG_LOGGING_STORAGE_KEY, debugLoggingEnabled ? "true" : "false");
+    } catch {
+      // The server setting still receives the current in-memory preference.
+    }
+
+    void updateServerDiagnosticLogging(debugLoggingEnabled).catch(() => undefined);
+  }, [debugLoggingEnabled]);
 
   useEffect(() => {
     if (skipNextSidebarVisiblePersistRef.current) {
@@ -1737,6 +1771,11 @@ export default function App() {
   );
 
   const copyDiagnosticLogs = useCallback(async () => {
+    if (!debugLoggingEnabled) {
+      showMessage("请先打开调试日志");
+      return;
+    }
+
     try {
       postDiagnosticEvent("manual-diagnostics", { action: "copy-start" });
       const diagnostics = await getDiagnosticEventsText();
@@ -1744,7 +1783,7 @@ export default function App() {
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "复制诊断日志失败");
     }
-  }, [copyText, showMessage]);
+  }, [copyText, debugLoggingEnabled, showMessage]);
 
   const revealPath = useCallback(
     async (pathName: string, type: TreeItem["type"] = "file") => {
@@ -3234,10 +3273,27 @@ export default function App() {
               </button>
             </div>
             <div className="setting-row">
+              <span>调试日志</span>
+              <button
+                className={`switch-button ${debugLoggingEnabled ? "is-on" : ""}`}
+                type="button"
+                title={debugLoggingEnabled ? "关闭调试日志" : "打开调试日志"}
+                aria-pressed={debugLoggingEnabled}
+                onClick={() => setDebugLoggingEnabled((current) => !current)}
+              >
+                <Check size={13} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="setting-row">
               <span>版本</span>
               <span className="setting-value">FnEditor {meta?.version ?? "unknown"}</span>
             </div>
-            <button className="secondary-action" type="button" onClick={() => void copyDiagnosticLogs()}>
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={!debugLoggingEnabled}
+              onClick={() => void copyDiagnosticLogs()}
+            >
               <Copy size={14} aria-hidden="true" />
               复制诊断日志
             </button>
