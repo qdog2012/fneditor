@@ -222,16 +222,26 @@ const INSTANCE_HEARTBEAT_MS = 1200;
 const INSTANCE_TTL_MS = 4500;
 const HANDOFF_ACK_TIMEOUT_MS = 1200;
 const HANDLED_MESSAGE_TTL_MS = 30000;
+const FIRST_FILE_REOPEN_FALLBACK_DELAY_MS = 220;
 const INSTANCE_STORAGE_KEY = "fncode.activeInstance";
 const INSTANCE_MESSAGE_KEY = "fncode.instanceMessage";
 const INSTANCE_CHANNEL_NAME = "fncode.instance";
-const SESSION_INSTANCE_KEY = "fncode.sessionInstance";
+const LAUNCH_CONTEXT_STORAGE_KEY = "fncode.launchContext";
+const WINDOW_LAUNCH_CONTEXT_PREFIX = "fncode-launch:";
 const CURRENT_INSTANCE_ID = createInstanceId();
 
 type InstanceRecord = {
   id: string;
   updatedAt: number;
 };
+
+type WindowLaunchContext = {
+  initialExternalOpenPath: string;
+  createdAt: number;
+  requestId?: string;
+};
+
+type ExternalOpenRole = "deciding" | "primary" | "secondary";
 
 type InstanceMessage =
   | {
@@ -358,27 +368,65 @@ function postInstanceMessage(message: InstanceMessage) {
   window.localStorage.setItem(INSTANCE_MESSAGE_KEY, JSON.stringify(message));
 }
 
-function shouldHandoffExternalOpen(externalPath: string, instanceId: string) {
-  if (!externalPath) {
-    window.sessionStorage.setItem(SESSION_INSTANCE_KEY, instanceId);
-    return false;
+function parseWindowLaunchContext(value: string): WindowLaunchContext | null {
+  if (!value.startsWith(WINDOW_LAUNCH_CONTEXT_PREFIX)) {
+    return null;
   }
 
-  const record = getFreshInstanceRecord();
-  const previousSessionInstance = window.sessionStorage.getItem(SESSION_INSTANCE_KEY);
-  window.sessionStorage.setItem(SESSION_INSTANCE_KEY, instanceId);
-
-  if (record && record.id !== instanceId && record.id !== previousSessionInstance) {
-    return true;
-  }
-
-  writeInstanceRecord(instanceId);
-  return false;
+  return parseLaunchContextValue(value.slice(WINDOW_LAUNCH_CONTEXT_PREFIX.length));
 }
 
-function hasFreshPrimaryInstance(instanceId: string) {
-  const record = getFreshInstanceRecord();
-  return Boolean(record && record.id !== instanceId);
+function parseLaunchContextValue(value: string): WindowLaunchContext | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<WindowLaunchContext>;
+    if (
+      typeof parsed.initialExternalOpenPath === "string" &&
+      typeof parsed.createdAt === "number" &&
+      Date.now() - parsed.createdAt <= HANDLED_MESSAGE_TTL_MS
+    ) {
+      return {
+        initialExternalOpenPath: parsed.initialExternalOpenPath,
+        createdAt: parsed.createdAt,
+        requestId: typeof parsed.requestId === "string" ? parsed.requestId : undefined
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function readWindowLaunchContext() {
+  try {
+    return parseWindowLaunchContext(window.name || "");
+  } catch {
+    return null;
+  }
+}
+
+function takeStoredLaunchContext() {
+  try {
+    const context = parseLaunchContextValue(window.localStorage.getItem(LAUNCH_CONTEXT_STORAGE_KEY) || "");
+    window.localStorage.removeItem(LAUNCH_CONTEXT_STORAGE_KEY);
+    return context;
+  } catch {
+    return null;
+  }
+}
+
+function writeWindowLaunchContext(context: WindowLaunchContext) {
+  try {
+    window.name = `${WINDOW_LAUNCH_CONTEXT_PREFIX}${JSON.stringify(context)}`;
+  } catch {
+    // The localStorage copy below keeps the neutral redirect fallback available.
+  }
+
+  try {
+    window.localStorage.setItem(LAUNCH_CONTEXT_STORAGE_KEY, JSON.stringify(context));
+  } catch {
+    // Losing this only disables the focus fallback if window.name is also unavailable.
+  }
 }
 
 function closeHandoffWindow() {
@@ -495,6 +543,19 @@ function isAbsoluteExternalPath(value: string) {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
+function normalizePathForComparison(value: string) {
+  return decodeExternalOpenValue(value).replaceAll("\\", "/").replace(/\/+$/, "");
+}
+
+function areSameExternalPath(a: string, b: string) {
+  const left = normalizePathForComparison(a);
+  const right = normalizePathForComparison(b);
+  if (/^[A-Za-z]:\//.test(left) || /^[A-Za-z]:\//.test(right)) {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return left === right;
+}
+
 function getExternalPathFromParams(params: URLSearchParams) {
   for (const key of EXTERNAL_OPEN_PARAM_KEYS) {
     const value = params.get(key);
@@ -539,16 +600,50 @@ function getExternalOpenPathFromLocation(location: Location) {
   return "";
 }
 
+function removeExternalOpenParams(url: URL) {
+  let changed = false;
+  for (const key of EXTERNAL_OPEN_PARAM_KEYS) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+
+  const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+  const hashQueryIndex = hash.indexOf("?");
+  if (hash.startsWith("?") || hashQueryIndex >= 0) {
+    const prefix = hash.startsWith("?") ? "" : hash.slice(0, hashQueryIndex);
+    const search = hash.startsWith("?") ? hash : hash.slice(hashQueryIndex);
+    const params = new URLSearchParams(search);
+    let hashChanged = false;
+
+    for (const key of EXTERNAL_OPEN_PARAM_KEYS) {
+      if (params.has(key)) {
+        params.delete(key);
+        hashChanged = true;
+      }
+    }
+
+    if (hashChanged) {
+      const nextSearch = params.toString();
+      url.hash = prefix || nextSearch ? `${prefix}${nextSearch ? `?${nextSearch}` : ""}` : "";
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function getNeutralEditorUrlFromLocation(location: Location) {
+  const url = new URL(location.href);
+  removeExternalOpenParams(url);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 function clearExternalOpenParamsFromLocation() {
   try {
     const url = new URL(window.location.href);
-    let changed = false;
-    for (const key of EXTERNAL_OPEN_PARAM_KEYS) {
-      if (url.searchParams.has(key)) {
-        url.searchParams.delete(key);
-        changed = true;
-      }
-    }
+    const changed = removeExternalOpenParams(url);
 
     if (changed) {
       window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
@@ -570,6 +665,52 @@ function resolveApiUrl(url: string) {
   }
 
   return relativeUrl;
+}
+
+function postDiagnosticEvent(event: string, data: Record<string, unknown> = {}) {
+  if (!INITIAL_EXTERNAL_OPEN_PATH && !INITIAL_FOCUS_FALLBACK_EXTERNAL_OPEN_PATH && event !== "manual-diagnostics") {
+    return;
+  }
+
+  try {
+    const body = JSON.stringify({
+      source: "app",
+      event,
+      data: {
+        instanceId: CURRENT_INSTANCE_ID,
+        initialExternalOpenPath: INITIAL_EXTERNAL_OPEN_PATH,
+        initialFocusFallbackExternalPath: INITIAL_FOCUS_FALLBACK_EXTERNAL_OPEN_PATH,
+        href: window.location.href,
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus(),
+        ...data
+      }
+    });
+    const url = resolveApiUrl("/api/diagnostics/events");
+
+    if (navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }))) {
+      return;
+    }
+
+    void fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true
+    }).catch(() => undefined);
+  } catch {
+    // Diagnostics should never affect editor behavior.
+  }
+}
+
+async function getDiagnosticEventsText() {
+  const response = await fetch(resolveApiUrl("/api/diagnostics/events.txt"), {
+    headers: { Accept: "text/plain" }
+  });
+  if (!response.ok) {
+    throw new Error(response.statusText || "Failed to read diagnostics");
+  }
+  return response.text();
 }
 
 async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
@@ -617,6 +758,36 @@ async function getPendingServerHandoffs(instanceId: string) {
   return apiRequest<{ items: Array<Extract<InstanceMessage, { type: "open-file" }>> }>(
     `/api/handoff/pending?sourceId=${encodeURIComponent(instanceId)}`
   );
+}
+
+function createOpenFileRequest(pathName: string, sourceId: string): Extract<InstanceMessage, { type: "open-file" }> {
+  return {
+    type: "open-file",
+    id: createInstanceId(),
+    sourceId,
+    path: pathName,
+    createdAt: Date.now()
+  };
+}
+
+async function restartAsNeutralPrimaryWithPendingOpen(pathName: string, sourceId: string) {
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const neutralUrl = getNeutralEditorUrlFromLocation(window.location);
+  if (!pathName || neutralUrl === currentUrl) {
+    postDiagnosticEvent("restart-neutral-skipped", { pathName, sourceId, currentUrl, neutralUrl });
+    return false;
+  }
+
+  const request = createOpenFileRequest(pathName, sourceId);
+  postDiagnosticEvent("restart-neutral", { pathName, sourceId, currentUrl, neutralUrl, requestId: request.id });
+  writeWindowLaunchContext({
+    initialExternalOpenPath: pathName,
+    createdAt: Date.now(),
+    requestId: request.id
+  });
+  await postServerHandoffRequest(request);
+  window.location.replace(neutralUrl);
+  return true;
 }
 
 async function sendServerInstanceHeartbeat(instanceId: string) {
@@ -755,11 +926,17 @@ function formatBytes(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const INITIAL_STORED_LAUNCH_CONTEXT = takeStoredLaunchContext();
+const INITIAL_WINDOW_LAUNCH_CONTEXT = readWindowLaunchContext() || INITIAL_STORED_LAUNCH_CONTEXT;
+const INITIAL_EXTERNAL_OPEN_PATH = getExternalOpenPathFromLocation(window.location);
+const INITIAL_FOCUS_FALLBACK_EXTERNAL_OPEN_PATH =
+  INITIAL_EXTERNAL_OPEN_PATH || INITIAL_WINDOW_LAUNCH_CONTEXT?.initialExternalOpenPath || "";
+const INITIAL_EXTERNAL_OPEN_ROLE: ExternalOpenRole = INITIAL_EXTERNAL_OPEN_PATH ? "deciding" : "primary";
+
 export default function App() {
-  const initialExternalOpenPath = useMemo(() => getExternalOpenPathFromLocation(window.location), []);
-  const [externalOpenRole, setExternalOpenRole] = useState<"deciding" | "primary" | "secondary">(
-    initialExternalOpenPath ? "deciding" : "primary"
-  );
+  const initialExternalOpenPath = INITIAL_EXTERNAL_OPEN_PATH;
+  const initialFocusFallbackExternalPath = INITIAL_FOCUS_FALLBACK_EXTERNAL_OPEN_PATH;
+  const [externalOpenRole, setExternalOpenRole] = useState<ExternalOpenRole>(INITIAL_EXTERNAL_OPEN_ROLE);
   const shouldUseExternalSecondaryMode = externalOpenRole === "secondary";
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("explorer");
   const [sidebarVisible, setSidebarVisible] = useState(
@@ -815,6 +992,36 @@ export default function App() {
   const sidebarVisibleRef = useRef(sidebarVisible);
   const skipNextSidebarVisiblePersistRef = useRef(Boolean(initialExternalOpenPath));
   const searchAbortRef = useRef<AbortController | null>(null);
+  const initialExternalClientPathRef = useRef("");
+  const initialExternalAbsolutePathRef = useRef(initialFocusFallbackExternalPath);
+  const lastExternalHandoffAtRef = useRef(0);
+  const lastWindowBlurAtRef = useRef(0);
+  const lastParentPointerAtRef = useRef(0);
+  const initialReopenFallbackArmedAtRef = useRef(0);
+  const initialReopenFallbackArmedUntilRef = useRef(0);
+  const parentSurfaceSignatureRef = useRef("");
+  const focusFallbackTimerRef = useRef<number | null>(null);
+  const parentActivationFallbackTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    postDiagnosticEvent("app-role-state", {
+      externalOpenRole,
+      handoffState,
+      activePath,
+      openFiles: openFiles.map((file) => ({
+        path: file.path,
+        absolutePath: file.absolutePath,
+        active: file.path === activePath
+      })),
+      parentFrame: (() => {
+        try {
+          return Boolean(window.frameElement);
+        } catch {
+          return false;
+        }
+      })()
+    });
+  }, [activePath, externalOpenRole, handoffState, openFiles]);
 
   useEffect(() => {
     directoriesRef.current = directories;
@@ -838,14 +1045,34 @@ export default function App() {
     }
 
     let cancelled = false;
+    postDiagnosticEvent("decide-primary-start", { initialExternalOpenPath });
     void claimServerPrimaryInstance(instanceIdRef.current)
-      .then((payload) => {
+      .then(async (payload) => {
         if (cancelled) {
           return;
         }
-        setExternalOpenRole(payload.active ? "secondary" : "primary");
+        postDiagnosticEvent("decide-primary-result", {
+          active: payload.active,
+          primaryId: payload.id,
+          ageMs: payload.ageMs
+        });
+        if (payload.active) {
+          setExternalOpenRole("secondary");
+          return;
+        }
+
+        const restarting = await restartAsNeutralPrimaryWithPendingOpen(
+          initialExternalOpenPath,
+          instanceIdRef.current
+        );
+        if (!cancelled && !restarting) {
+          setExternalOpenRole("primary");
+        }
       })
-      .catch(() => {
+      .catch((error) => {
+        postDiagnosticEvent("decide-primary-failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
         if (!cancelled) {
           setExternalOpenRole("primary");
         }
@@ -1509,6 +1736,16 @@ export default function App() {
     [showMessage]
   );
 
+  const copyDiagnosticLogs = useCallback(async () => {
+    try {
+      postDiagnosticEvent("manual-diagnostics", { action: "copy-start" });
+      const diagnostics = await getDiagnosticEventsText();
+      await copyText(diagnostics || "No diagnostic events", "已复制诊断日志");
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "复制诊断日志失败");
+    }
+  }, [copyText, showMessage]);
+
   const revealPath = useCallback(
     async (pathName: string, type: TreeItem["type"] = "file") => {
       setSidebarMode("explorer");
@@ -1535,20 +1772,43 @@ export default function App() {
   const openExternalAbsolutePath = useCallback(
     async (externalPath: string, options?: { revealInExplorer?: boolean }) => {
       const revealInExplorer = options?.revealInExplorer ?? false;
+      postDiagnosticEvent("open-external-start", {
+        externalPath,
+        revealInExplorer,
+        activePath: activePathRef.current,
+        openFiles: openFilesRef.current.map((file) => ({ path: file.path, absolutePath: file.absolutePath }))
+      });
       try {
         const payload = await apiRequest<OpenPathPayload>("/api/open-path", {
           method: "POST",
           body: JSON.stringify({ path: externalPath })
         });
         const file = toOpenFile(payload.file);
+        postDiagnosticEvent("open-external-loaded", {
+          externalPath,
+          filePath: file.path,
+          absolutePath: file.absolutePath,
+          rootPath: payload.meta.rootPath
+        });
+        if (
+          initialFocusFallbackExternalPath &&
+          areSameExternalPath(
+            externalPath,
+            initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath
+          )
+        ) {
+          initialExternalClientPathRef.current = file.path;
+          initialExternalAbsolutePathRef.current = file.absolutePath || externalPath;
+        }
         const rootChanged = !meta || payload.meta.rootPath !== meta.rootPath;
 
         if (rootChanged) {
           const hasDirtyFile = openFilesRef.current.some((entry) => entry.content !== entry.savedContent);
           if (hasDirtyFile) {
+            postDiagnosticEvent("open-external-blocked", { reason: "dirty-root-change", externalPath });
             showMessage("当前有未保存文件，请保存后再从其他根目录打开文件");
-              return false;
-            }
+            return false;
+          }
 
           await resetWorkspace(payload.meta, { loadExplorerRoot: revealInExplorer });
           setOpenFiles([file]);
@@ -1579,13 +1839,23 @@ export default function App() {
         }
         hideSidebarForExternalOpen();
         showMessage(`已打开 ${file.name}`);
+        postDiagnosticEvent("open-external-complete", {
+          externalPath,
+          filePath: file.path,
+          absolutePath: file.absolutePath,
+          activePath: file.path
+        });
         return true;
       } catch (error) {
+        postDiagnosticEvent("open-external-failed", {
+          externalPath,
+          message: error instanceof Error ? error.message : String(error)
+        });
         showMessage(error instanceof Error ? error.message : "打开外部文件失败");
         return false;
       }
     },
-    [hideSidebarForExternalOpen, meta, resetWorkspace, revealPath, showMessage]
+    [hideSidebarForExternalOpen, initialFocusFallbackExternalPath, meta, resetWorkspace, revealPath, showMessage]
   );
 
   useEffect(() => {
@@ -1594,15 +1864,30 @@ export default function App() {
     }
 
     const handleMessage = (message: InstanceMessage | null) => {
-      if (
-        !message ||
-        message.type !== "open-file" ||
-        message.sourceId === instanceIdRef.current ||
-        !isPrimaryInstanceRef.current
-      ) {
+      if (!message) {
+        postDiagnosticEvent("handoff-message-ignored", { reason: "empty-or-invalid" });
+        return;
+      }
+      if (message.type !== "open-file") {
+        postDiagnosticEvent("handoff-message-ignored", { reason: "not-open-file", type: message.type });
+        return;
+      }
+      if (message.sourceId === instanceIdRef.current) {
+        postDiagnosticEvent("handoff-message-ignored", { reason: "same-source", requestId: message.id });
+        return;
+      }
+      if (!isPrimaryInstanceRef.current) {
+        postDiagnosticEvent("handoff-message-ignored", { reason: "not-primary", requestId: message.id });
         return;
       }
 
+      postDiagnosticEvent("handoff-message-received", {
+        requestId: message.id,
+        sourceId: message.sourceId,
+        path: message.path,
+        activePath: activePathRef.current,
+        openFiles: openFilesRef.current.map((file) => ({ path: file.path, absolutePath: file.absolutePath }))
+      });
       const now = Date.now();
       for (const [key, handledAt] of handledOpenMessageKeysRef.current) {
         if (now - handledAt > HANDLED_MESSAGE_TTL_MS) {
@@ -1612,11 +1897,19 @@ export default function App() {
 
       const messageKey = getOpenFileMessageKey(message);
       if (handledOpenMessageKeysRef.current.has(messageKey)) {
+        postDiagnosticEvent("handoff-message-ignored", { reason: "duplicate", requestId: message.id });
         return;
       }
 
+      lastExternalHandoffAtRef.current = now;
       handledOpenMessageKeysRef.current.set(messageKey, now);
       void openExternalAbsolutePath(message.path).then((opened) => {
+        postDiagnosticEvent("handoff-message-opened", {
+          requestId: message.id,
+          path: message.path,
+          opened,
+          activePath: activePathRef.current
+        });
         if (!opened) {
           handledOpenMessageKeysRef.current.delete(messageKey);
           return;
@@ -1683,6 +1976,635 @@ export default function App() {
   }, [externalOpenRole, handoffState, openExternalAbsolutePath]);
 
   useEffect(() => {
+    if (!initialFocusFallbackExternalPath || handoffState !== "none" || externalOpenRole !== "primary") {
+      return;
+    }
+
+    postDiagnosticEvent("focus-fallback-install", {
+      initialFocusFallbackExternalPath,
+      activePath: activePathRef.current,
+      openFiles: openFilesRef.current.map((file) => ({ path: file.path, absolutePath: file.absolutePath }))
+    });
+
+    const clearFocusFallbackTimer = () => {
+      if (focusFallbackTimerRef.current !== null) {
+        window.clearTimeout(focusFallbackTimerRef.current);
+        focusFallbackTimerRef.current = null;
+      }
+    };
+
+    const clearParentActivationFallbackTimer = () => {
+      if (parentActivationFallbackTimerRef.current !== null) {
+        window.clearTimeout(parentActivationFallbackTimerRef.current);
+        parentActivationFallbackTimerRef.current = null;
+      }
+    };
+
+    const clearFallbackTimers = () => {
+      clearFocusFallbackTimer();
+      clearParentActivationFallbackTimer();
+    };
+
+    const isInitialReopenFallbackArmed = () => Date.now() <= initialReopenFallbackArmedUntilRef.current;
+
+    const armInitialReopenFallback = (reason: string, durationMs = 2400) => {
+      const armedAt = Date.now();
+      initialReopenFallbackArmedAtRef.current = armedAt;
+      initialReopenFallbackArmedUntilRef.current = armedAt + durationMs;
+      postDiagnosticEvent("focus-fallback-armed", {
+        reason,
+        durationMs,
+        targetPath: initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath,
+        activePath: activePathRef.current
+      });
+    };
+
+    const disarmInitialReopenFallback = (reason: string) => {
+      if (!initialReopenFallbackArmedUntilRef.current && focusFallbackTimerRef.current === null) {
+        return;
+      }
+      initialReopenFallbackArmedAtRef.current = 0;
+      initialReopenFallbackArmedUntilRef.current = 0;
+      clearFallbackTimers();
+      postDiagnosticEvent("focus-fallback-disarmed", {
+        reason,
+        activePath: activePathRef.current
+      });
+    };
+
+    let lastKnownFocused = document.hasFocus();
+
+    const markBlur = (reason = "blur") => {
+      lastKnownFocused = false;
+      lastWindowBlurAtRef.current = Date.now();
+      clearFocusFallbackTimer();
+      postDiagnosticEvent("focus-fallback-blur", {
+        reason,
+        activePath: activePathRef.current,
+        documentHasFocus: document.hasFocus(),
+        visibilityState: document.visibilityState
+      });
+    };
+
+    const scheduleInitialFileFocusFallback = (
+      reason = "focus",
+      options?: { delayMs?: number; handoffCancelAfterMs?: number; minBlurAgeMs?: number; requireBlur?: boolean }
+    ) => {
+      lastKnownFocused = true;
+      const delayMs = options?.delayMs ?? 450;
+      const minBlurAgeMs = options?.minBlurAgeMs ?? 200;
+      const requireBlur = options?.requireBlur ?? true;
+      if ((activePathRef.current || initialExternalClientPathRef.current) && !isInitialReopenFallbackArmed()) {
+        postDiagnosticEvent("focus-fallback-skip", {
+          reason,
+          skip: "not-armed",
+          activePath: activePathRef.current
+        });
+        return;
+      }
+
+      const blurredAt = lastWindowBlurAtRef.current;
+      if (!blurredAt || document.visibilityState === "hidden") {
+        const canContinueWithoutIframeBlur = !blurredAt && !requireBlur && document.visibilityState !== "hidden";
+        if (!canContinueWithoutIframeBlur) {
+          postDiagnosticEvent("focus-fallback-skip", {
+            reason,
+            skip: !blurredAt ? "no-blur-recorded" : "document-hidden",
+            activePath: activePathRef.current
+          });
+          return;
+        }
+      }
+
+      const blurAge = blurredAt ? Date.now() - blurredAt : Number.POSITIVE_INFINITY;
+      if ((blurredAt && blurAge < minBlurAgeMs) || blurAge > 30000) {
+        postDiagnosticEvent("focus-fallback-skip", {
+          reason,
+          skip: "blur-age-out-of-range",
+          blurAge,
+          minBlurAgeMs,
+          activePath: activePathRef.current
+        });
+        return;
+      }
+
+      clearFocusFallbackTimer();
+      postDiagnosticEvent("focus-fallback-scheduled", {
+        reason,
+        blurAge,
+        targetPath: initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath,
+        activePath: activePathRef.current
+      });
+      focusFallbackTimerRef.current = window.setTimeout(() => {
+        focusFallbackTimerRef.current = null;
+        const handoffAge = Date.now() - lastExternalHandoffAtRef.current;
+        const hasBlockingHandoff =
+          typeof options?.handoffCancelAfterMs === "number"
+            ? lastExternalHandoffAtRef.current >= options.handoffCancelAfterMs
+            : handoffAge < 1200;
+        if (hasBlockingHandoff) {
+          postDiagnosticEvent("focus-fallback-cancelled", {
+            reason,
+            cancelled: "recent-handoff",
+            handoffAge,
+            handoffCancelAfterMs: options?.handoffCancelAfterMs
+          });
+          disarmInitialReopenFallback("recent-handoff");
+          return;
+        }
+
+        const initialClientPath = initialExternalClientPathRef.current;
+        if (initialClientPath && activePathRef.current === initialClientPath) {
+          postDiagnosticEvent("focus-fallback-cancelled", {
+            reason,
+            cancelled: "already-active",
+            initialClientPath,
+            activePath: activePathRef.current
+          });
+          disarmInitialReopenFallback("already-active");
+          return;
+        }
+
+        disarmInitialReopenFallback("opening-initial-file");
+        postDiagnosticEvent("focus-fallback-open", {
+          reason,
+          targetPath: initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath,
+          activePath: activePathRef.current,
+          initialClientPath
+        });
+        void openExternalAbsolutePath(initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath);
+      }, delayMs);
+    };
+
+    const pollFocusState = () => {
+      const isFocused = document.hasFocus();
+      if (!isFocused) {
+        if (lastKnownFocused || !lastWindowBlurAtRef.current) {
+          markBlur("document-focus-poll");
+        }
+        return;
+      }
+
+      if (!lastKnownFocused) {
+        scheduleInitialFileFocusFallback("document-focus-poll");
+      }
+    };
+
+    const getParentFrameElement = () => {
+      try {
+        return window.frameElement as HTMLElement | null;
+      } catch {
+        return null;
+      }
+    };
+
+    const isParentFrameFocused = () => {
+      const frameElement = getParentFrameElement();
+      if (!frameElement) {
+        return document.hasFocus();
+      }
+
+      try {
+        return frameElement.ownerDocument.activeElement === frameElement;
+      } catch {
+        return false;
+      }
+    };
+
+    const readClassName = (element: Element) => {
+      if (typeof element.className === "string") {
+        return element.className;
+      }
+      return element.getAttribute("class") || "";
+    };
+
+    const readParentElementSummary = (element: HTMLElement | null) => {
+      if (!element || typeof element.getBoundingClientRect !== "function") {
+        return null;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+      return {
+        tag: element.tagName,
+        id: element.id,
+        className: readClassName(element).slice(0, 220),
+        role: element.getAttribute("role") || "",
+        title: element.getAttribute("title") || "",
+        ariaLabel: element.getAttribute("aria-label") || "",
+        dataState: element.getAttribute("data-state") || "",
+        dataActive: element.getAttribute("data-active") || "",
+        style: element.style.cssText.slice(0, 220),
+        display: style?.display || "",
+        visibility: style?.visibility || "",
+        opacity: style?.opacity || "",
+        zIndex: style?.zIndex || "",
+        rect: {
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }
+      };
+    };
+
+    const readParentFrameSnapshot = () => {
+      const frameElement = getParentFrameElement();
+      if (!frameElement) {
+        return { frame: null, ancestors: [] };
+      }
+
+      const ancestors = [];
+      let element: HTMLElement | null = frameElement;
+      for (let depth = 0; element && element !== frameElement.ownerDocument.body && depth < 8; depth += 1) {
+        ancestors.push(readParentElementSummary(element));
+        element = element.parentElement;
+      }
+      return { frame: readParentElementSummary(frameElement), ancestors };
+    };
+
+    const readParentActiveElementSummary = () => {
+      const frameElement = getParentFrameElement();
+      if (!frameElement) {
+        return null;
+      }
+
+      return readParentElementSummary(frameElement.ownerDocument.activeElement as HTMLElement | null);
+    };
+
+    const parentEventTargetMatchesInitialFile = (target: EventTarget | null) => {
+      const initialFileName = getBaseName(initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath);
+      if (
+        !initialFileName ||
+        !target ||
+        typeof (target as Element).getAttribute !== "function" ||
+        !("parentElement" in (target as Element))
+      ) {
+        return false;
+      }
+
+      let element: Element | null = target as Element;
+      for (let depth = 0; element && depth < 7; depth += 1) {
+        const candidates = [
+          element.getAttribute("title"),
+          element.getAttribute("aria-label"),
+          element.getAttribute("data-name"),
+          element.getAttribute("data-file-name"),
+          element.textContent?.trim().slice(0, 300)
+        ].filter((value): value is string => Boolean(value));
+
+        if (candidates.some((value) => value === initialFileName || value.includes(initialFileName))) {
+          return true;
+        }
+
+        element = element.parentElement;
+      }
+
+      return false;
+    };
+
+    const readParentSurfaceSignature = () => {
+      const frameElement = getParentFrameElement();
+      if (!frameElement) {
+        return "";
+      }
+
+      const parentDocument = frameElement.ownerDocument;
+      const parentWindow = parentDocument.defaultView;
+      const parts: string[] = [];
+      let element: HTMLElement | null = frameElement;
+
+      for (let depth = 0; element && element !== parentDocument.body && depth < 8; depth += 1) {
+        const rect = element.getBoundingClientRect();
+        const style = parentWindow?.getComputedStyle(element);
+        const parent = element.parentElement;
+        const zIndexes =
+          depth === 0 && parent
+            ? Array.from(parent.children)
+                .slice(0, 80)
+                .map((child) => {
+                  const childElement = child as HTMLElement;
+                  const childStyle = parentWindow?.getComputedStyle(childElement);
+                  return childStyle?.zIndex || childElement.style.zIndex || "";
+                })
+                .join(",")
+            : "";
+
+        parts.push(
+          [
+            element.tagName,
+            element.id,
+            readClassName(element).slice(0, 160),
+            element.getAttribute("aria-hidden") || "",
+            element.getAttribute("data-state") || "",
+            element.getAttribute("data-active") || "",
+            element.style.cssText.slice(0, 180),
+            style?.display || "",
+            style?.visibility || "",
+            style?.opacity || "",
+            style?.zIndex || "",
+            Math.round(rect.left),
+            Math.round(rect.top),
+            Math.round(rect.width),
+            Math.round(rect.height),
+            zIndexes
+          ].join("\u001f")
+        );
+
+        element = element.parentElement;
+      }
+
+      return parts.join("\u001e");
+    };
+
+    const isParentSurfaceRendered = () => {
+      const frameElement = getParentFrameElement();
+      if (!frameElement) {
+        return true;
+      }
+
+      const parentDocument = frameElement.ownerDocument;
+      const parentWindow = parentDocument.defaultView;
+      let element: HTMLElement | null = frameElement;
+
+      for (let depth = 0; element && element !== parentDocument.body && depth < 8; depth += 1) {
+        const style = parentWindow?.getComputedStyle(element);
+        if (style?.display === "none" || style?.visibility === "hidden" || style?.opacity === "0") {
+          return false;
+        }
+        element = element.parentElement;
+      }
+
+      const rect = frameElement.getBoundingClientRect();
+      return rect.width > 1 && rect.height > 1;
+    };
+
+    const scheduleFallbackFromParentActivation = (event: Event) => {
+      if (event.type !== "dblclick") {
+        return;
+      }
+      if (!parentEventTargetMatchesInitialFile(event.target)) {
+        postDiagnosticEvent("parent-activation-fallback-skip", {
+          reason: "target-mismatch",
+          eventType: event.type,
+          target: readParentElementSummary(event.target as HTMLElement | null)
+        });
+        return;
+      }
+      if (!isParentSurfaceRendered()) {
+        postDiagnosticEvent("parent-activation-fallback-skip", { reason: "surface-hidden", eventType: event.type });
+        return;
+      }
+
+      clearParentActivationFallbackTimer();
+      armInitialReopenFallback("parent-dblclick");
+      const scheduledAt = Date.now();
+      postDiagnosticEvent("parent-activation-fallback-scheduled", {
+        eventType: event.type,
+        delayMs: FIRST_FILE_REOPEN_FALLBACK_DELAY_MS,
+        targetPath: initialExternalAbsolutePathRef.current || initialFocusFallbackExternalPath,
+        activePath: activePathRef.current
+      });
+      parentActivationFallbackTimerRef.current = window.setTimeout(() => {
+        parentActivationFallbackTimerRef.current = null;
+        if (lastExternalHandoffAtRef.current >= scheduledAt) {
+          postDiagnosticEvent("parent-activation-fallback-cancelled", {
+            reason: "recent-handoff",
+            handoffAge: Date.now() - lastExternalHandoffAtRef.current,
+            scheduledAt
+          });
+          disarmInitialReopenFallback("recent-handoff");
+          return;
+        }
+
+        const initialClientPath = initialExternalClientPathRef.current;
+        const alreadyOpen = initialClientPath
+          ? openFilesRef.current.some((file) => file.path === initialClientPath)
+          : false;
+        if (alreadyOpen && activePathRef.current !== initialClientPath) {
+          setActivePath(initialClientPath);
+          setSelectedEntry({ path: initialClientPath, type: "file" });
+          postDiagnosticEvent("parent-activation-fast-tab-switch", {
+            initialClientPath,
+            previousActivePath: activePathRef.current
+          });
+        }
+
+        scheduleInitialFileFocusFallback("parent-dblclick", {
+          delayMs: 0,
+          handoffCancelAfterMs: scheduledAt,
+          minBlurAgeMs: 0,
+          requireBlur: false
+        });
+      }, FIRST_FILE_REOPEN_FALLBACK_DELAY_MS);
+    };
+
+    const scheduleFallbackFromParentSurface = () => {
+      if (!isInitialReopenFallbackArmed()) {
+        postDiagnosticEvent("parent-surface-fallback-skip", { reason: "not-armed" });
+        return;
+      }
+      if (!initialExternalClientPathRef.current && !initialExternalAbsolutePathRef.current) {
+        postDiagnosticEvent("parent-surface-fallback-skip", { reason: "no-initial-path" });
+        return;
+      }
+      if (Date.now() - lastExternalHandoffAtRef.current < 1200) {
+        postDiagnosticEvent("parent-surface-fallback-skip", {
+          reason: "recent-handoff",
+          handoffAge: Date.now() - lastExternalHandoffAtRef.current
+        });
+        return;
+      }
+      if (Date.now() - lastParentPointerAtRef.current > 2500) {
+        postDiagnosticEvent("parent-surface-fallback-skip", {
+          reason: "no-recent-parent-pointer",
+          pointerAge: Date.now() - lastParentPointerAtRef.current
+        });
+        return;
+      }
+      if (!isParentSurfaceRendered()) {
+        postDiagnosticEvent("parent-surface-fallback-skip", { reason: "surface-hidden" });
+        return;
+      }
+
+      const delay = Date.now() - lastWindowBlurAtRef.current < 220 ? 260 : 0;
+      postDiagnosticEvent("parent-surface-fallback-scheduled", { delay });
+      window.setTimeout(
+        () =>
+          scheduleInitialFileFocusFallback("parent-surface", {
+            handoffCancelAfterMs: initialReopenFallbackArmedAtRef.current,
+            minBlurAgeMs: 0,
+            requireBlur: false
+          }),
+        delay
+      );
+    };
+
+    const pollParentSurfaceState = () => {
+      const nextSignature = readParentSurfaceSignature();
+      const previousSignature = parentSurfaceSignatureRef.current;
+      if (!nextSignature) {
+        return;
+      }
+
+      if (!previousSignature) {
+        parentSurfaceSignatureRef.current = nextSignature;
+        postDiagnosticEvent("parent-surface-initial", {
+          activeElement: readParentActiveElementSummary(),
+          snapshot: readParentFrameSnapshot()
+        });
+        return;
+      }
+
+      if (nextSignature !== previousSignature) {
+        parentSurfaceSignatureRef.current = nextSignature;
+        postDiagnosticEvent("parent-surface-change", {
+          activeElement: readParentActiveElementSummary(),
+          snapshot: readParentFrameSnapshot()
+        });
+        scheduleFallbackFromParentSurface();
+      }
+    };
+
+    let lastKnownParentFrameFocused = isParentFrameFocused();
+
+    const pollParentFrameFocusState = () => {
+      const isFocused = isParentFrameFocused();
+      if (!isFocused) {
+        if (lastKnownParentFrameFocused || !lastWindowBlurAtRef.current) {
+          markBlur("parent-frame-focus-poll");
+        }
+        lastKnownParentFrameFocused = false;
+        return;
+      }
+
+      if (!lastKnownParentFrameFocused) {
+        lastKnownParentFrameFocused = true;
+        postDiagnosticEvent("parent-frame-focused", { activeElement: readParentActiveElementSummary() });
+        scheduleInitialFileFocusFallback("parent-frame-focus-poll");
+      }
+    };
+
+    const handleParentFocusIn = () => {
+      postDiagnosticEvent("parent-focusin", { activeElement: readParentActiveElementSummary() });
+      window.setTimeout(pollParentFrameFocusState, 0);
+      window.setTimeout(pollParentFrameFocusState, 180);
+    };
+
+    const handleParentPointer = (event: Event) => {
+      const frameElement = getParentFrameElement();
+      try {
+        const target = event.target as Node | null;
+        if (frameElement && target && (target === frameElement || frameElement.contains(target))) {
+          return;
+        }
+      } catch {
+        // Treat unknown parent events as outside the editor frame.
+      }
+
+      const now = Date.now();
+      lastParentPointerAtRef.current = now;
+      lastWindowBlurAtRef.current = now;
+      clearFocusFallbackTimer();
+      const targetElement =
+        event.target && typeof (event.target as HTMLElement).getBoundingClientRect === "function"
+          ? (event.target as HTMLElement)
+          : null;
+      postDiagnosticEvent("parent-pointer", {
+        eventType: event.type,
+        target: readParentElementSummary(targetElement),
+        activeElement: readParentActiveElementSummary()
+      });
+      scheduleFallbackFromParentActivation(event);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        markBlur("visibility-hidden");
+        return;
+      }
+      scheduleInitialFileFocusFallback("visibility-visible");
+    };
+
+    const handleEditorInteraction = (event: Event) => {
+      if (!isInitialReopenFallbackArmed() && focusFallbackTimerRef.current === null) {
+        return;
+      }
+      lastParentPointerAtRef.current = 0;
+      disarmInitialReopenFallback(`editor-${event.type}`);
+    };
+
+    const handleWindowBlur = () => markBlur("window-blur");
+    const handleWindowFocus = () => scheduleInitialFileFocusFallback("window-focus");
+    const handlePageShow = () => scheduleInitialFileFocusFallback("pageshow");
+
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("pointerdown", handleEditorInteraction, true);
+    document.addEventListener("keydown", handleEditorInteraction, true);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const focusPollId = window.setInterval(pollFocusState, 500);
+    const parentFrameFocusPollId = window.setInterval(pollParentFrameFocusState, 220);
+    const parentSurfacePollId = window.setInterval(pollParentSurfaceState, 300);
+    let parentDocument: Document | null = null;
+    let parentSurfaceObserver: MutationObserver | null = null;
+
+    try {
+      const frameElement = getParentFrameElement();
+      if (frameElement) {
+        parentDocument = frameElement.ownerDocument;
+        postDiagnosticEvent("parent-monitor-attached", {
+          activeElement: readParentActiveElementSummary(),
+          snapshot: readParentFrameSnapshot()
+        });
+        parentDocument.addEventListener("focusin", handleParentFocusIn, true);
+        parentDocument.addEventListener("pointerdown", handleParentPointer, true);
+        parentDocument.addEventListener("dblclick", handleParentPointer, true);
+        parentSurfaceObserver = new MutationObserver(pollParentSurfaceState);
+
+        let element: HTMLElement | null = frameElement;
+        for (let depth = 0; element && element !== parentDocument.body && depth < 8; depth += 1) {
+          parentSurfaceObserver.observe(element, {
+            attributes: true,
+            attributeFilter: ["class", "style", "aria-hidden", "data-state", "data-active"]
+          });
+          element = element.parentElement;
+        }
+      } else {
+        postDiagnosticEvent("parent-monitor-unavailable", { reason: "no-frame-element" });
+      }
+    } catch (error) {
+      postDiagnosticEvent("parent-monitor-unavailable", {
+        reason: "exception",
+        message: error instanceof Error ? error.message : String(error)
+      });
+      parentDocument = null;
+      parentSurfaceObserver = null;
+    }
+    pollParentFrameFocusState();
+    pollParentSurfaceState();
+
+    return () => {
+      clearFocusFallbackTimer();
+      clearParentActivationFallbackTimer();
+      window.clearInterval(focusPollId);
+      window.clearInterval(parentFrameFocusPollId);
+      window.clearInterval(parentSurfacePollId);
+      parentSurfaceObserver?.disconnect();
+      parentDocument?.removeEventListener("focusin", handleParentFocusIn, true);
+      parentDocument?.removeEventListener("pointerdown", handleParentPointer, true);
+      parentDocument?.removeEventListener("dblclick", handleParentPointer, true);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("pointerdown", handleEditorInteraction, true);
+      document.removeEventListener("keydown", handleEditorInteraction, true);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [externalOpenRole, handoffState, initialFocusFallbackExternalPath, openExternalAbsolutePath]);
+
+  useEffect(() => {
     if (!shouldUseExternalSecondaryMode || externalOpenHandledRef.current) {
       return;
     }
@@ -1691,18 +2613,14 @@ export default function App() {
     externalOpenHandledRef.current = true;
 
     if (!externalPath) {
+      postDiagnosticEvent("secondary-open-failed", { reason: "no-external-path" });
       setSecondaryOpenStatus("failed");
       return;
     }
     clearExternalOpenParamsFromLocation();
 
-    const request: Extract<InstanceMessage, { type: "open-file" }> = {
-      type: "open-file",
-      id: createInstanceId(),
-      sourceId: instanceIdRef.current,
-      path: externalPath,
-      createdAt: Date.now()
-    };
+    const request = createOpenFileRequest(externalPath, instanceIdRef.current);
+    postDiagnosticEvent("secondary-open-start", { externalPath, requestId: request.id });
 
     let completed = false;
     let checkingPrimary = false;
@@ -1712,6 +2630,7 @@ export default function App() {
       }
       completed = true;
       setSecondaryOpenStatus("opened");
+      postDiagnosticEvent("secondary-open-acked", { requestId: request.id });
       closeHandoffWindow();
       window.setTimeout(closeHandoffWindow, 80);
       window.setTimeout(closeHandoffWindow, 220);
@@ -1725,6 +2644,7 @@ export default function App() {
 
       completed = true;
       externalOpenHandledRef.current = false;
+      postDiagnosticEvent("secondary-promote-primary", { requestId: request.id, externalPath });
       setExternalOpenRole("primary");
     };
 
@@ -1746,16 +2666,32 @@ export default function App() {
       checkingPrimary = true;
       void getServerPrimaryInstance(instanceIdRef.current)
         .then(async (primary) => {
+          postDiagnosticEvent("secondary-primary-check", {
+            requestId: request.id,
+            active: primary.active,
+            primaryId: primary.id,
+            ageMs: primary.ageMs
+          });
           if (completed || primary.active) {
             return;
           }
 
           const claim = await claimServerPrimaryInstance(instanceIdRef.current);
+          postDiagnosticEvent("secondary-primary-claim", {
+            requestId: request.id,
+            active: claim.active,
+            primaryId: claim.id,
+            ageMs: claim.ageMs
+          });
           if (!completed && !claim.active) {
             promoteToPrimary();
           }
         })
-        .catch(() => {
+        .catch((error) => {
+          postDiagnosticEvent("secondary-primary-check-failed", {
+            requestId: request.id,
+            message: error instanceof Error ? error.message : String(error)
+          });
           if (!completed) {
             setSecondaryOpenStatus("failed");
           }
@@ -1788,10 +2724,13 @@ export default function App() {
     externalOpenHandledRef.current = true;
 
     if (!externalPath) {
+      postDiagnosticEvent("primary-initial-open-skipped", { reason: "no-external-path" });
       return;
     }
 
+    postDiagnosticEvent("primary-initial-open-start", { externalPath });
     void openExternalAbsolutePath(externalPath).then((opened) => {
+      postDiagnosticEvent("primary-initial-open-complete", { externalPath, opened });
       if (opened) {
         clearExternalOpenParamsFromLocation();
       }
@@ -2298,6 +3237,10 @@ export default function App() {
               <span>版本</span>
               <span className="setting-value">FnEditor {meta?.version ?? "unknown"}</span>
             </div>
+            <button className="secondary-action" type="button" onClick={() => void copyDiagnosticLogs()}>
+              <Copy size={14} aria-hidden="true" />
+              复制诊断日志
+            </button>
           </div>
         </>
       );

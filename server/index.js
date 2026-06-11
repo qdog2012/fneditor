@@ -19,6 +19,7 @@ const restrictRootSelection = ["1", "true", "yes"].includes(
 );
 const handoffTtlMs = 15000;
 const instanceTtlMs = 3000;
+const diagnosticMaxEntries = 800;
 const lfOnlyExtensions = new Set([
   "sh",
   "bash",
@@ -59,6 +60,7 @@ app.use((req, res, next) => {
 const handoffClients = new Set();
 const handoffRequests = new Map();
 const activeInstances = new Map();
+const diagnosticEvents = [];
 const appVersion = process.env.FNCODE_VERSION || process.env.FNEDITOR_VERSION || (await readAppVersion());
 
 const asyncRoute = (handler) => (req, res, next) => {
@@ -133,6 +135,45 @@ function cleanupActiveInstances() {
 function sendHandoffEvent(client, event, data) {
   client.write(`event: ${event}\n`);
   client.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function sanitizeDiagnosticValue(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return value ?? null;
+  }
+  if (["string", "number", "boolean"].includes(typeof value)) {
+    return typeof value === "string" && value.length > 800 ? `${value.slice(0, 800)}...` : value;
+  }
+  if (depth >= 4) {
+    return "[truncated]";
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 40).map((item) => sanitizeDiagnosticValue(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const result = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 80)) {
+      result[key] = sanitizeDiagnosticValue(entry, depth + 1);
+    }
+    return result;
+  }
+  return String(value);
+}
+
+function addDiagnosticEvent(source, event, data = {}) {
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    createdAt: new Date().toISOString(),
+    source: String(source || "unknown").slice(0, 80),
+    event: String(event || "event").slice(0, 120),
+    data: sanitizeDiagnosticValue(data)
+  };
+  diagnosticEvents.push(item);
+  if (diagnosticEvents.length > diagnosticMaxEntries) {
+    diagnosticEvents.splice(0, diagnosticEvents.length - diagnosticMaxEntries);
+  }
+  console.info(`[diagnostic] ${item.createdAt} ${item.source} ${item.event} ${JSON.stringify(item.data)}`);
+  return item;
 }
 
 function broadcastHandoffRequest(request) {
@@ -994,11 +1035,17 @@ app.post(
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
     if (primary) {
+      addDiagnosticEvent("server", "instance-claim-existing-primary", {
+        sourceId: id,
+        primaryId: primary.id,
+        ageMs: Date.now() - primary.updatedAt
+      });
       res.json({ active: true, id: primary.id, ageMs: Date.now() - primary.updatedAt });
       return;
     }
 
     activeInstances.set(id, { id, updatedAt: Date.now() });
+    addDiagnosticEvent("server", "instance-claim-new-primary", { sourceId: id });
     res.json({ active: false, id, ageMs: 0 });
   })
 );
@@ -1010,6 +1057,12 @@ app.get("/api/instances/primary", (req, res) => {
     .filter((instance) => instance.id !== sourceId)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
+  addDiagnosticEvent("server", "instance-primary-check", {
+    sourceId,
+    active: Boolean(primary),
+    primaryId: primary?.id ?? "",
+    ageMs: primary ? Date.now() - primary.updatedAt : 0
+  });
   res.json({ active: Boolean(primary), id: primary?.id ?? "", ageMs: primary ? Date.now() - primary.updatedAt : 0 });
 });
 
@@ -1200,6 +1253,7 @@ app.post(
       acknowledged: false
     };
     handoffRequests.set(id, request);
+    addDiagnosticEvent("server", "handoff-open", { id, sourceId, path: requestedPath, createdAt });
     broadcastHandoffRequest(request);
     res.json({ ok: true });
   })
@@ -1238,9 +1292,41 @@ app.post(
       request.acknowledged = true;
       request.acknowledgedAt = Date.now();
     }
+    addDiagnosticEvent("server", "handoff-ack", { id, found: Boolean(request) });
     res.json({ ok: true });
   })
 );
+
+app.post(
+  "/api/diagnostics/events",
+  asyncRoute(async (req, res) => {
+    const source = req.body?.source;
+    const event = req.body?.event;
+    addDiagnosticEvent(source, event, req.body?.data ?? {});
+    res.json({ ok: true });
+  })
+);
+
+app.get("/api/diagnostics/events", (_req, res) => {
+  res.json({ items: diagnosticEvents });
+});
+
+app.get("/api/diagnostics/events.txt", (_req, res) => {
+  const lines = diagnosticEvents.map((item) =>
+    [
+      item.createdAt,
+      item.source,
+      item.event,
+      JSON.stringify(item.data)
+    ].join(" ")
+  );
+  res.type("text/plain").send(`${lines.join("\n")}\n`);
+});
+
+app.delete("/api/diagnostics/events", (_req, res) => {
+  diagnosticEvents.splice(0, diagnosticEvents.length);
+  res.json({ ok: true });
+});
 
 async function saveFileRequest(req, res) {
   const { path: clientPath, absolutePath, content, encoding = "utf8", hasBom = false, lineEnding } = req.body ?? {};
@@ -1378,26 +1464,28 @@ app.get("/open-with", (req, res) => {
     <style>
       html,
       body {
-        height: 100%;
+        width: 1px;
+        height: 1px;
         margin: 0;
-        background: #1e1f22;
-        color: #c9d1d9;
+        overflow: hidden;
+        background: transparent;
+        color: transparent;
         font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       body {
-        display: grid;
-        place-items: center;
+        opacity: 0;
       }
     </style>
   </head>
-  <body>
-    <div>正在用 FnEditor 打开...</div>
+  <body aria-hidden="true">
     <script>
       (function () {
         var requestedPath = ${JSON.stringify(requestedPath)};
+        var launchContextStorageKey = "fncode.launchContext";
         var instanceId =
           (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||
           String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+        var openWithStartedAt = Date.now();
 
         function apiUrl(path) {
           var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
@@ -1407,10 +1495,85 @@ app.get("/open-with", (req, res) => {
           return path;
         }
 
+        function postDiagnostic(event, data) {
+          try {
+            var payload = JSON.stringify({
+              source: "open-with",
+              event: event,
+              data: Object.assign(
+                {
+                  instanceId: instanceId,
+                  requestedPath: requestedPath,
+                  elapsedMs: Date.now() - openWithStartedAt,
+                  href: window.location.href,
+                  visibilityState: document.visibilityState
+                },
+                data || {}
+              )
+            });
+            var url = apiUrl("/api/diagnostics/events");
+            if (navigator.sendBeacon && navigator.sendBeacon(url, new Blob([payload], { type: "application/json" }))) {
+              return;
+            }
+            fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: payload,
+              keepalive: true
+            }).catch(function () {});
+          } catch (_) {}
+        }
+
         function editorUrl(path) {
           var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
           var base = proxyIndex >= 0 ? window.location.pathname.slice(0, proxyIndex) + "/proxy.cgi/" : "/";
           return base + (path ? "?open=" + encodeURIComponent(path) : "");
+        }
+
+        function createOpenRequest(path) {
+          var createdAt = Date.now();
+          return {
+            type: "open-file",
+            id: instanceId + "-open-" + createdAt + "-" + Math.random().toString(36).slice(2),
+            sourceId: instanceId,
+            path: path,
+            createdAt: createdAt
+          };
+        }
+
+        function postOpenRequest(request) {
+          return fetchJson(apiUrl("/api/handoff/open"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request)
+          });
+        }
+
+        function writeLaunchContext(path, requestId) {
+          var context = {
+            initialExternalOpenPath: path,
+            createdAt: Date.now(),
+            requestId: requestId
+          };
+          try {
+            window.name = "fncode-launch:" + JSON.stringify(context);
+          } catch (_) {}
+          try {
+            window.localStorage.setItem(launchContextStorageKey, JSON.stringify(context));
+          } catch (_) {}
+        }
+
+        async function waitForAcknowledgement(requestId, maxAttempts, delayMs) {
+          for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+            await sleep(delayMs);
+            try {
+              var status = await fetchJson(apiUrl("/api/handoff/status?id=" + encodeURIComponent(requestId)));
+              if (status.acknowledged) {
+                return true;
+              }
+            } catch (_) {}
+          }
+          return false;
         }
 
         function parkOpenWithUrl() {
@@ -1477,52 +1640,75 @@ app.get("/open-with", (req, res) => {
         }
 
         async function run() {
+          postDiagnostic("start", {
+            hasParent: window.parent && window.parent !== window,
+            referrer: document.referrer || ""
+          });
           if (!requestedPath) {
+            postDiagnostic("no-requested-path", {});
             window.location.replace(editorUrl(""));
             return;
           }
           parkOpenWithUrl();
+          postDiagnostic("parked-open-with-url", {});
+
+          var request = createOpenRequest(requestedPath);
+          var posted = false;
+          async function ensurePosted() {
+            if (posted) {
+              return;
+            }
+            await postOpenRequest(request);
+            posted = true;
+            postDiagnostic("posted-open-request", { requestId: request.id });
+          }
 
           try {
             var primary = await fetchJson(
               apiUrl("/api/instances/primary?sourceId=" + encodeURIComponent(instanceId))
             );
             var primaryAge = Number(primary.ageMs == null ? Number.POSITIVE_INFINITY : primary.ageMs);
+            postDiagnostic("primary-check", {
+              active: Boolean(primary.active),
+              primaryId: primary.id || "",
+              primaryAge: primaryAge
+            });
             if (primary.active && primaryAge <= 3000) {
-              var requestCreatedAt = Date.now();
-              var requestId =
-                instanceId + "-open-" + requestCreatedAt + "-" + Math.random().toString(36).slice(2);
-              await fetchJson(apiUrl("/api/handoff/open"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  type: "open-file",
-                  id: requestId,
-                  sourceId: instanceId,
-                  path: requestedPath,
-                  createdAt: requestCreatedAt
-                })
-              });
+              await ensurePosted();
+              postDiagnostic("closing-bridge-window", { requestId: request.id });
+              closeWindow();
+              window.setTimeout(closeWindow, 40);
+              window.setTimeout(closeWindow, 120);
+              window.setTimeout(closeWindow, 260);
 
-              for (var attempt = 0; attempt < 20; attempt += 1) {
-                await sleep(150);
-                try {
-                  var status = await fetchJson(apiUrl("/api/handoff/status?id=" + encodeURIComponent(requestId)));
-                  if (status.acknowledged) {
-                    closeWindow();
-                    window.setTimeout(closeWindow, 80);
-                    window.setTimeout(closeWindow, 220);
-                    window.setTimeout(closeWindow, 700);
-                    return;
-                  }
-                } catch (_) {}
+              var acknowledged = await waitForAcknowledgement(request.id, 20, 150);
+              postDiagnostic("ack-check-complete", { requestId: request.id, acknowledged: acknowledged });
+              if (acknowledged) {
+                closeWindow();
+                window.setTimeout(closeWindow, 80);
+                window.setTimeout(closeWindow, 220);
+                window.setTimeout(closeWindow, 700);
               }
+              return;
             }
-          } catch (_) {
-            // Fall through and open a normal editor window.
+          } catch (error) {
+            postDiagnostic("primary-check-failed", { message: error && error.message ? error.message : String(error) });
+            // Fall through to in-place neutral redirect.
           }
 
-          window.location.replace(editorUrl(requestedPath));
+          try {
+            writeLaunchContext(requestedPath, request.id);
+            await ensurePosted();
+            postDiagnostic("neutral-redirect", { requestId: request.id, targetUrl: editorUrl("") });
+            window.location.replace(editorUrl(""));
+          } catch (error) {
+            postDiagnostic("param-redirect", {
+              requestId: request.id,
+              targetUrl: editorUrl(requestedPath),
+              message: error && error.message ? error.message : String(error)
+            });
+            window.location.replace(editorUrl(requestedPath));
+          }
         }
 
         run();

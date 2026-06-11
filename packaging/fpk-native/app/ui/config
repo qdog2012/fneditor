@@ -8,7 +8,9 @@
       "url": "/cgi/ThirdParty/fncode/proxy.cgi/",
       "allUsers": true,
       "control": {
-        "accessPerm": "editable"
+        "accessPerm": "editable",
+        "portPerm": "readonly",
+        "pathPerm": "editable"
       },
       "noDisplay": false
     },
@@ -20,7 +22,9 @@
       "url": "/cgi/ThirdParty/fncode/proxy.cgi/open-with",
       "allUsers": true,
       "control": {
-        "accessPerm": "editable"
+        "accessPerm": "editable",
+        "portPerm": "readonly",
+        "pathPerm": "editable"
       },
       "noDisplay": true,
       "fileTypes": [
