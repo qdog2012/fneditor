@@ -92,7 +92,8 @@ cat > "${STAGE_DIR}/app/server/package.json" <<EOF
   "type": "module",
   "dependencies": {
     "compression": "$(node -p "require('./package.json').dependencies.compression")",
-    "express": "$(node -p "require('./package.json').dependencies.express")"
+    "express": "$(node -p "require('./package.json').dependencies.express")",
+    "iconv-lite": "$(node -p "require('./package.json').dependencies['iconv-lite']")"
   }
 }
 EOF
@@ -111,11 +112,13 @@ rm -rf "$TMP_NODE_DIR"
 
 chmod +x "${STAGE_DIR}"/cmd/*
 chmod +x "${STAGE_DIR}/app/server/runtime/node/bin/node"
+sed -i 's/\r$//' "${STAGE_DIR}/app/ui/index.cgi"
+chmod +x "${STAGE_DIR}/app/ui/index.cgi"
 
 echo "Native FPK staging directory prepared:"
 echo "  ${STAGE_DIR}"
 echo
-echo "Next step: build the .fpk with fnOS fnpack/Fnpackup from this staging directory."
+echo "Next step: cd ${ROOT_DIR} && bash scripts/package-fpk-native.sh"
 echo "Version: ${VERSION}, Node: ${NODE_VERSION}, arch: ${NODE_ARCH}"
 if [ "$ORIGINAL_ROOT_DIR" != "$ROOT_DIR" ]; then
   echo

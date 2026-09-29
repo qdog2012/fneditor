@@ -1,10 +1,12 @@
 import express from "express";
 import compression from "compression";
+import iconv from "iconv-lite";
 import fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -719,6 +721,39 @@ function compareTreeItems(a, b) {
   return a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
 }
 
+function decodeWithFatalTextDecoder(buffer, encoding) {
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyTextContent(content) {
+  const sample = content.slice(0, 4096);
+  if (!sample) {
+    return true;
+  }
+
+  let suspiciousCount = 0;
+  for (const char of sample) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (
+      codePoint === 0 ||
+      codePoint === 0xfffd ||
+      (codePoint < 32 && codePoint !== 9 && codePoint !== 10 && codePoint !== 12 && codePoint !== 13)
+    ) {
+      suspiciousCount += 1;
+    }
+  }
+
+  return suspiciousCount <= 8 && suspiciousCount / sample.length < 0.02;
+}
+
+function stripLeadingBom(content) {
+  return content.replace(/^\uFEFF/, "");
+}
+
 function detectTextEncoding(buffer) {
   if (buffer.length === 0) {
     return { encoding: "utf8", hasBom: false };
@@ -774,7 +809,15 @@ function detectTextEncoding(buffer) {
     return null;
   }
 
-  return { encoding: "utf8", hasBom: false };
+  if (decodeWithFatalTextDecoder(buffer, "utf-8") !== null) {
+    return { encoding: "utf8", hasBom: false };
+  }
+
+  if (decodeWithFatalTextDecoder(buffer, "gb18030") !== null) {
+    return { encoding: "gb18030", hasBom: false };
+  }
+
+  return null;
 }
 
 function decodeUtf16be(buffer) {
@@ -815,24 +858,52 @@ function decodeTextBuffer(buffer) {
   const { encoding, hasBom } = detected;
   if (encoding === "utf16le") {
     const start = hasBom ? 2 : 0;
+    const content = stripLeadingBom(buffer.subarray(start).toString("utf16le"));
+    if (!isLikelyTextContent(content)) {
+      return null;
+    }
+
     return {
-      content: buffer.subarray(start).toString("utf16le").replace(/^\uFEFF/, ""),
+      content,
       encoding,
       hasBom
     };
   }
 
   if (encoding === "utf16be") {
+    const content = decodeUtf16be(buffer);
+    if (!isLikelyTextContent(content)) {
+      return null;
+    }
+
     return {
-      content: decodeUtf16be(buffer),
+      content,
+      encoding,
+      hasBom
+    };
+  }
+
+  if (encoding === "gb18030") {
+    const content = stripLeadingBom(iconv.decode(buffer, "gb18030"));
+    if (!isLikelyTextContent(content)) {
+      return null;
+    }
+
+    return {
+      content,
       encoding,
       hasBom
     };
   }
 
   const start = hasBom ? 3 : 0;
+  const content = decodeWithFatalTextDecoder(buffer.subarray(start), "utf-8");
+  if (content === null || !isLikelyTextContent(content)) {
+    return null;
+  }
+
   return {
-    content: buffer.subarray(start).toString("utf8").replace(/^\uFEFF/, ""),
+    content: stripLeadingBom(content),
     encoding,
     hasBom
   };
@@ -846,6 +917,10 @@ function encodeTextContent(content, encoding = "utf8", hasBom = false) {
 
   if (encoding === "utf16be") {
     return encodeUtf16be(content, hasBom);
+  }
+
+  if (encoding === "gb18030" || encoding === "gbk" || encoding === "gb2312") {
+    return iconv.encode(content, "gb18030");
   }
 
   const prefix = hasBom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0);
@@ -1551,9 +1626,9 @@ app.get("/open-with", (req, res) => {
         var openWithStartedAt = Date.now();
 
         function apiUrl(path) {
-          var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
-          if (proxyIndex >= 0) {
-            return window.location.pathname.slice(0, proxyIndex) + "/proxy.cgi" + path;
+          var cgiIndex = window.location.pathname.indexOf("/index.cgi");
+          if (cgiIndex >= 0) {
+            return window.location.pathname.slice(0, cgiIndex) + "/index.cgi" + path;
           }
           return path;
         }
@@ -1601,8 +1676,8 @@ app.get("/open-with", (req, res) => {
         }
 
         function editorUrl(path) {
-          var proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
-          var base = proxyIndex >= 0 ? window.location.pathname.slice(0, proxyIndex) + "/proxy.cgi/" : "/";
+          var cgiIndex = window.location.pathname.indexOf("/index.cgi");
+          var base = cgiIndex >= 0 ? window.location.pathname.slice(0, cgiIndex) + "/index.cgi/" : "/";
           return base + (path ? "?open=" + encodeURIComponent(path) : "");
         }
 

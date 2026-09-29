@@ -5,7 +5,7 @@
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",
-      "url": "/cgi/ThirdParty/fncode/proxy.cgi/",
+      "url": "/cgi/ThirdParty/fncode/index.cgi/",
       "allUsers": true,
       "control": {
         "accessPerm": "editable",
@@ -19,7 +19,7 @@
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",
-      "url": "/cgi/ThirdParty/fncode/proxy.cgi/open-with",
+      "url": "/cgi/ThirdParty/fncode/index.cgi/open-with",
       "allUsers": true,
       "control": {
         "accessPerm": "editable",

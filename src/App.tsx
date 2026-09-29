@@ -661,9 +661,9 @@ function resolveApiUrl(url: string) {
   }
 
   const relativeUrl = url.startsWith("/") ? url.slice(1) : url;
-  const proxyIndex = window.location.pathname.indexOf("/proxy.cgi");
-  if (proxyIndex >= 0) {
-    return `${window.location.pathname.slice(0, proxyIndex)}/proxy.cgi/${relativeUrl}`;
+  const cgiIndex = window.location.pathname.indexOf("/index.cgi");
+  if (cgiIndex >= 0) {
+    return `${window.location.pathname.slice(0, cgiIndex)}/index.cgi/${relativeUrl}`;
   }
 
   return relativeUrl;

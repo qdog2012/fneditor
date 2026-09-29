@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cgi_name="proxy.cgi"
+cgi_name="index.cgi"
 target_url="http://localhost:39280"
 
 if [[ "$REQUEST_URI" == *"$cgi_name"* ]]; then

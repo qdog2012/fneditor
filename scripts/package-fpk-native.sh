@@ -25,6 +25,12 @@ if [ ! -x "$STAGE_DIR/app/server/runtime/node/bin/node" ]; then
   exit 1
 fi
 
+if [ ! -f "$STAGE_DIR/app/ui/index.cgi" ]; then
+  echo "Missing CGI entry point: $STAGE_DIR/app/ui/index.cgi" >&2
+  echo "Run scripts/prepare-fpk-native.sh again to refresh the staging directory." >&2
+  exit 1
+fi
+
 generate_png() {
   local output_path="$1"
   local size="$2"
@@ -152,10 +158,8 @@ find "$STAGE_DIR/cmd" -type f -exec sed -i 's/\r$//' {} \;
 sed -i 's/\r$//' "$STAGE_DIR/manifest"
 chmod +x "$STAGE_DIR"/cmd/*
 chmod +x "$STAGE_DIR/app/server/runtime/node/bin/node"
-if [ -f "$STAGE_DIR/app/ui/proxy.cgi" ]; then
-  sed -i 's/\r$//' "$STAGE_DIR/app/ui/proxy.cgi"
-  chmod +x "$STAGE_DIR/app/ui/proxy.cgi"
-fi
+sed -i 's/\r$//' "$STAGE_DIR/app/ui/index.cgi"
+chmod +x "$STAGE_DIR/app/ui/index.cgi"
 
 (
   cd "$STAGE_DIR"

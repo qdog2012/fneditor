@@ -62,9 +62,15 @@ services:
 bash scripts/prepare-fpk-native.sh
 ```
 
-脚本会生成 `build/fpk-native/fneditor` staging 目录。随后使用飞牛 `fnpack` 或 Fnpackup 从该目录生成 `.fpk`。
+脚本会生成 `build/fpk-native/fncode` staging 目录。随后执行：
 
-如果在 WSL 中从 `/mnt/c`、`/mnt/d` 这类 Windows 挂载目录执行脚本，脚本会自动把源码复制到 `~/.cache/fneditor-fpk-src` 后再安装依赖，避免 Windows `node_modules` 和 Linux 原生依赖混用导致 `npm ci` 失败。
+```bash
+bash scripts/package-fpk-native.sh
+```
+
+生成的 `.fpk` 位于 `build/fpk-output`。将新版本安装到飞牛后，桌面入口会使用 `index.cgi`，符合 fnOS 1.2.0701 的 CGI 校验要求。
+
+如果在 WSL 中从 `/mnt/c`、`/mnt/d` 这类 Windows 挂载目录执行脚本，脚本会自动把源码复制到 `~/.cache/fncode-fpk-src` 后再安装依赖，避免 Windows `node_modules` 和 Linux 原生依赖混用导致 `npm ci` 失败。后续打包命令需在这个副本目录中执行，生成的包也位于该目录的 `build/fpk-output`。
 
 原生 FPK 默认把可编辑根目录放在应用数据目录下的 `files`，安装后可在设置中改成实际“我的文件”路径。最后应用的根目录会保存到应用状态文件中，服务重启后自动恢复。
 
