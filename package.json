@@ -1,19 +1,19 @@
 {
   "name": "fncode",
-  "version": "0.1.74",
+  "version": "0.1.75",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server/index.js",
-    "build": "tsc -b && vite build",
-    "start": "node server/index.js",
-    "start:prod": "node -e \"process.env.NODE_ENV='production'; import('./server/index.js')\""
+    "dev": "node scripts/dev.mjs",
+    "build:frontend": "tsc -b && vite build",
+    "build:server": "node scripts/build-server.mjs",
+    "build": "npm run build:frontend && npm run build:server",
+    "start": "node scripts/start.mjs",
+    "start:prod": "node scripts/start.mjs",
+    "test:server": "go test -race ./server"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "compression": "^1.8.1",
-    "express": "^5.1.0",
-    "iconv-lite": "^0.6.3",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",
     "react": "^19.0.0",

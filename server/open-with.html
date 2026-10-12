@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FnEditor</title>
+    <style>
+      html,
+      body {
+        width: 1px;
+        height: 1px;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        color: transparent;
+        font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body aria-hidden="true">
+    <script>
+      (function () {
+        var requestedPath = {{.RequestedPath}};
+        var launchContextStorageKey = "fncode.launchContext";
+        var debugLoggingStorageKey = "fncode.debugLogging";
+        var instanceId =
+          (window.crypto && window.crypto.randomUUID && window.crypto.randomUUID()) ||
+          String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+        var openWithStartedAt = Date.now();
+
+        function apiUrl(path) {
+          var cgiIndex = window.location.pathname.indexOf("/index.cgi");
+          if (cgiIndex >= 0) {
+            return window.location.pathname.slice(0, cgiIndex) + "/index.cgi" + path;
+          }
+          return path;
+        }
+
+        function isDebugLoggingEnabled() {
+          try {
+            return window.localStorage.getItem(debugLoggingStorageKey) === "true";
+          } catch (_) {
+            return false;
+          }
+        }
+
+        function postDiagnostic(event, data) {
+          if (!isDebugLoggingEnabled()) {
+            return;
+          }
+
+          try {
+            var payload = JSON.stringify({
+              source: "open-with",
+              event: event,
+              debugLoggingEnabled: true,
+              data: Object.assign(
+                {
+                  instanceId: instanceId,
+                  requestedPath: requestedPath,
+                  elapsedMs: Date.now() - openWithStartedAt,
+                  href: window.location.href,
+                  visibilityState: document.visibilityState
+                },
+                data || {}
+              )
+            });
+            var url = apiUrl("/api/diagnostics/events");
+            if (navigator.sendBeacon && navigator.sendBeacon(url, new Blob([payload], { type: "application/json" }))) {
+              return;
+            }
+            fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: payload,
+              keepalive: true
+            }).catch(function () {});
+          } catch (_) {}
+        }
+
+        function editorUrl(path) {
+          var cgiIndex = window.location.pathname.indexOf("/index.cgi");
+          var base = cgiIndex >= 0 ? window.location.pathname.slice(0, cgiIndex) + "/index.cgi/" : "/";
+          return base + (path ? "?open=" + encodeURIComponent(path) : "");
+        }
+
+        function createOpenRequest(path) {
+          var createdAt = Date.now();
+          return {
+            type: "open-file",
+            id: instanceId + "-open-" + createdAt + "-" + Math.random().toString(36).slice(2),
+            sourceId: instanceId,
+            path: path,
+            createdAt: createdAt,
+            debugLoggingEnabled: isDebugLoggingEnabled()
+          };
+        }
+
+        function postOpenRequest(request) {
+          return fetchJson(apiUrl("/api/handoff/open"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request)
+          });
+        }
+
+        function writeLaunchContext(path, requestId) {
+          var context = {
+            initialExternalOpenPath: path,
+            createdAt: Date.now(),
+            requestId: requestId
+          };
+          try {
+            window.name = "fncode-launch:" + JSON.stringify(context);
+          } catch (_) {}
+          try {
+            window.localStorage.setItem(launchContextStorageKey, JSON.stringify(context));
+          } catch (_) {}
+        }
+
+        async function waitForAcknowledgement(requestId, maxAttempts, delayMs) {
+          for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+            await sleep(delayMs);
+            try {
+              var status = await fetchJson(apiUrl("/api/handoff/status?id=" + encodeURIComponent(requestId)));
+              if (status.acknowledged) {
+                return true;
+              }
+            } catch (_) {}
+          }
+          return false;
+        }
+
+        function parkOpenWithUrl() {
+          try {
+            window.history.replaceState(
+              null,
+              document.title,
+              window.location.pathname + "?handoff=" + encodeURIComponent(instanceId)
+            );
+          } catch (_) {}
+        }
+
+        function closeWindow() {
+          try {
+            window.close();
+          } catch (_) {}
+          try {
+            var selfWindow = window.open("", "_self");
+            if (selfWindow) {
+              selfWindow.close();
+            }
+          } catch (_) {}
+          try {
+            var parentWindow = window.parent;
+            var frameElement = window.frameElement;
+            if (!parentWindow || parentWindow === window || !frameElement) {
+              return;
+            }
+            var selectors = [
+              '[aria-label*="关闭"]',
+              '[title*="关闭"]',
+              '[aria-label*="close" i]',
+              '[title*="close" i]',
+              '[class*="close" i]',
+              '[class*="Close"]'
+            ];
+            var current = frameElement;
+            for (var depth = 0; current && current !== parentWindow.document.body && depth < 12; depth += 1) {
+              for (var index = 0; index < selectors.length; index += 1) {
+                var button = current.querySelector(selectors[index]);
+                if (button && !button.hasAttribute("disabled")) {
+                  button.click();
+                  return;
+                }
+              }
+              current = current.parentElement;
+            }
+          } catch (_) {}
+        }
+
+        function fetchJson(url, options) {
+          return fetch(url, options).then(function (response) {
+            if (!response.ok) {
+              throw new Error(response.statusText || "Request failed");
+            }
+            return response.json();
+          });
+        }
+
+        function sleep(ms) {
+          return new Promise(function (resolve) {
+            window.setTimeout(resolve, ms);
+          });
+        }
+
+        async function run() {
+          postDiagnostic("start", {
+            hasParent: window.parent && window.parent !== window,
+            referrer: document.referrer || ""
+          });
+          if (!requestedPath) {
+            postDiagnostic("no-requested-path", {});
+            window.location.replace(editorUrl(""));
+            return;
+          }
+          parkOpenWithUrl();
+          postDiagnostic("parked-open-with-url", {});
+
+          var request = createOpenRequest(requestedPath);
+          var posted = false;
+          async function ensurePosted() {
+            if (posted) {
+              return;
+            }
+            await postOpenRequest(request);
+            posted = true;
+            postDiagnostic("posted-open-request", { requestId: request.id });
+          }
+
+          try {
+            var primary = await fetchJson(
+              apiUrl("/api/instances/primary?sourceId=" + encodeURIComponent(instanceId))
+            );
+            var primaryAge = Number(primary.ageMs == null ? Number.POSITIVE_INFINITY : primary.ageMs);
+            postDiagnostic("primary-check", {
+              active: Boolean(primary.active),
+              primaryId: primary.id || "",
+              primaryAge: primaryAge
+            });
+            if (primary.active && primaryAge <= 3000) {
+              await ensurePosted();
+              postDiagnostic("closing-bridge-window", { requestId: request.id });
+              closeWindow();
+              window.setTimeout(closeWindow, 40);
+              window.setTimeout(closeWindow, 120);
+              window.setTimeout(closeWindow, 260);
+
+              var acknowledged = await waitForAcknowledgement(request.id, 20, 150);
+              postDiagnostic("ack-check-complete", { requestId: request.id, acknowledged: acknowledged });
+              if (acknowledged) {
+                closeWindow();
+                window.setTimeout(closeWindow, 80);
+                window.setTimeout(closeWindow, 220);
+                window.setTimeout(closeWindow, 700);
+              }
+              return;
+            }
+          } catch (error) {
+            postDiagnostic("primary-check-failed", { message: error && error.message ? error.message : String(error) });
+            // Fall through to in-place neutral redirect.
+          }
+
+          try {
+            writeLaunchContext(requestedPath, request.id);
+            await ensurePosted();
+            postDiagnostic("neutral-redirect", { requestId: request.id, targetUrl: editorUrl("") });
+            window.location.replace(editorUrl(""));
+          } catch (error) {
+            postDiagnostic("param-redirect", {
+              requestId: request.id,
+              targetUrl: editorUrl(requestedPath),
+              message: error && error.message ? error.message : String(error)
+            });
+            window.location.replace(editorUrl(requestedPath));
+          }
+        }
+
+        run();
+      })();
+    </script>
+  </body>
+</html>

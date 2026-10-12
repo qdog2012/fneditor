@@ -4,10 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-fncode}"
 PACKAGE_NAME="${PACKAGE_NAME:-fneditor}"
-VERSION="${VERSION:-$(grep -m1 '^version=' "${ROOT_DIR}/packaging/fpk-native/manifest" | cut -d= -f2-)}"
 STAGE_DIR="${STAGE_DIR:-${ROOT_DIR}/build/fpk-native/${APP_NAME}}"
-OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/build/fpk-output}"
-OUTPUT_FILE="${OUTPUT_FILE:-${OUTPUT_DIR}/${PACKAGE_NAME}-${VERSION}.fpk}"
 
 if [ ! -d "$STAGE_DIR/app" ]; then
   echo "Missing app directory in staging path: $STAGE_DIR" >&2
@@ -20,8 +17,12 @@ if [ ! -f "$STAGE_DIR/manifest" ]; then
   exit 1
 fi
 
-if [ ! -x "$STAGE_DIR/app/server/runtime/node/bin/node" ]; then
-  echo "Missing Linux Node runtime: $STAGE_DIR/app/server/runtime/node/bin/node" >&2
+VERSION="${VERSION:-$(grep -m1 '^version=' "${STAGE_DIR}/manifest" | cut -d= -f2-)}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/build/fpk-output}"
+OUTPUT_FILE="${OUTPUT_FILE:-${OUTPUT_DIR}/${PACKAGE_NAME}-${VERSION}.fpk}"
+
+if [ ! -x "$STAGE_DIR/app/server/fneditor" ]; then
+  echo "Missing Go server executable: $STAGE_DIR/app/server/fneditor" >&2
   exit 1
 fi
 
@@ -157,7 +158,7 @@ fi
 find "$STAGE_DIR/cmd" -type f -exec sed -i 's/\r$//' {} \;
 sed -i 's/\r$//' "$STAGE_DIR/manifest"
 chmod +x "$STAGE_DIR"/cmd/*
-chmod +x "$STAGE_DIR/app/server/runtime/node/bin/node"
+chmod +x "$STAGE_DIR/app/server/fneditor"
 sed -i 's/\r$//' "$STAGE_DIR/app/ui/index.cgi"
 chmod +x "$STAGE_DIR/app/ui/index.cgi"
 

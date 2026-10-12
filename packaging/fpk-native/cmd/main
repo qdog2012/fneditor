@@ -6,7 +6,7 @@ SCRIPT_APP_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
 APP_HOME="${TRIM_APPDEST:-$SCRIPT_APP_HOME}"
 SERVER_DIR="${APP_HOME}/server"
 DATA_DIR="${TRIM_USERDATA:-${APP_HOME}/data}"
-NODE_BIN="${SERVER_DIR}/runtime/node/bin/node"
+SERVER_BIN="${SERVER_DIR}/fneditor"
 PID_FILE="${DATA_DIR}/fncode.pid"
 LOG_FILE="${DATA_DIR}/fncode.log"
 
@@ -17,13 +17,12 @@ read_manifest_version() {
     "${APP_HOME}/manifest" \
     "${TRIM_APPDEST:-}/manifest" \
     "${SCRIPT_APP_HOME}/manifest" \
-    "${APP_HOME}/server/package.json" \
-    "${SCRIPT_APP_HOME}/app/server/package.json"; do
+    "${SERVER_DIR}/VERSION"; do
     [ -n "$candidate" ] || continue
     [ -f "$candidate" ] || continue
     case "$candidate" in
-      *.json)
-        version="$("$NODE_BIN" -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (p.version) process.stdout.write(p.version);" "$candidate" 2>/dev/null || true)"
+      */VERSION)
+        version="$(head -n 1 "$candidate" 2>/dev/null || true)"
         [ -n "$version" ] && { printf '%s\n' "$version"; return 0; }
         ;;
       *)
@@ -110,20 +109,19 @@ start_app() {
     exit 0
   fi
 
-  chmod +x "$NODE_BIN" 2>/dev/null || true
-  if [ ! -x "$NODE_BIN" ]; then
-    echo "Node runtime not found: $NODE_BIN" >&2
+  chmod +x "$SERVER_BIN" 2>/dev/null || true
+  if [ ! -x "$SERVER_BIN" ]; then
+    echo "Go server executable not found: $SERVER_BIN" >&2
     exit 1
   fi
 
   cd "$SERVER_DIR"
-  NODE_ENV=production \
-    PORT="$PORT" \
+  PORT="$PORT" \
     FNCODE_VERSION="$APP_VERSION" \
     FNEDITOR_ROOT="$ROOT_DIR" \
     FNEDITOR_RESTRICT_ROOTS="${FNCODE_RESTRICT_ROOTS:-${FNEDITOR_RESTRICT_ROOTS:-1}}" \
     FNEDITOR_STATE_PATH="$STATE_PATH" \
-    nohup "$NODE_BIN" server/index.js >> "$LOG_FILE" 2>&1 &
+    nohup "$SERVER_BIN" >> "$LOG_FILE" 2>&1 &
   echo "$!" > "$PID_FILE"
   sleep 2
 
