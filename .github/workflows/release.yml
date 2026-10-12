@@ -41,6 +41,8 @@ jobs:
           bash scripts/package-fpk-native.sh
           cd build/fpk-output
           sha256sum "fneditor-${GITHUB_REF_NAME}.fpk" > SHA256SUMS
+      - name: Test frontend API responses
+        run: npm run test:frontend
       - name: Smoke test packaged service
         run: |
           app_dir="$PWD/build/fpk-native/fncode/app/server"

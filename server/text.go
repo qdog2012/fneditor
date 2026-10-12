@@ -22,7 +22,9 @@ func likelyText(content string) bool {
 			break
 		}
 		count++
-		if char == 0 || char == utf8.RuneError || (char < 32 && char != '\t' && char != '\n' && char != '\f' && char != '\r') {
+		// A literal replacement character is valid text; decoding validity is
+		// checked separately so garbled text is not mistaken for binary data.
+		if char == 0 || (char < 32 && char != '\t' && char != '\n' && char != '\f' && char != '\r') {
 			suspicious++
 		}
 	}
@@ -66,12 +68,28 @@ func decodeText(data []byte) (textContent, bool) {
 	var content string
 	switch encoding {
 	case "utf16le", "utf16be":
+		if len(data)%2 != 0 {
+			return textContent{}, false
+		}
 		units := make([]uint16, len(data)/2)
 		for i := range units {
 			if encoding == "utf16le" {
 				units[i] = binary.LittleEndian.Uint16(data[i*2:])
 			} else {
 				units[i] = binary.BigEndian.Uint16(data[i*2:])
+			}
+		}
+		// Reject malformed surrogates rather than silently replacing them and
+		// changing the original bytes when the file is saved.
+		for i := 0; i < len(units); i++ {
+			unit := units[i]
+			if unit >= 0xd800 && unit <= 0xdbff {
+				if i+1 >= len(units) || units[i+1] < 0xdc00 || units[i+1] > 0xdfff {
+					return textContent{}, false
+				}
+				i++
+			} else if unit >= 0xdc00 && unit <= 0xdfff {
+				return textContent{}, false
 			}
 		}
 		content = string(utf16.Decode(units))

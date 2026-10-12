@@ -35,6 +35,7 @@ import {
   type MouseEvent
 } from "react";
 import type { CodeEditorHandle } from "./CodeEditor";
+import { assertFilePayload, readApiResponse, type FilePayload } from "./api";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 
@@ -90,18 +91,6 @@ type SearchResult = {
   matchedBy: "name" | "content";
   line?: number;
   preview?: string;
-};
-
-type FilePayload = {
-  path: string;
-  absolutePath?: string;
-  name: string;
-  content: string;
-  modifiedAt: string;
-  size?: number;
-  encoding?: string;
-  hasBom?: boolean;
-  lineEnding?: "lf" | "crlf" | "cr";
 };
 
 type OpenPathPayload = {
@@ -737,18 +726,7 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
     }
   });
 
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      message = payload.error || message;
-    } catch {
-      // Keep the HTTP status text.
-    }
-    throw new Error(message);
-  }
-
-  return response.json() as Promise<T>;
+  return readApiResponse<T>(response);
 }
 
 async function updateServerDiagnosticLogging(enabled: boolean) {
@@ -865,6 +843,7 @@ function getLanguage(filePath: string) {
 }
 
 function toOpenFile(payload: FilePayload): OpenFile {
+  assertFilePayload(payload);
   return {
     path: payload.path,
     absolutePath: payload.absolutePath,

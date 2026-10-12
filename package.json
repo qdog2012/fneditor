@@ -1,6 +1,6 @@
 {
   "name": "fncode",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "build": "npm run build:frontend && npm run build:server",
     "start": "node scripts/start.mjs",
     "start:prod": "node scripts/start.mjs",
-    "test:server": "go test -race ./server"
+    "test:server": "go test -race ./server",
+    "test:frontend": "node --test scripts/test-api.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

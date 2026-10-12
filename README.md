@@ -80,7 +80,7 @@ bash scripts/package-fpk-native.sh
 
 生成的 `.fpk` 位于 `build/fpk-output`。将新版本安装到飞牛后，桌面入口会使用 `index.cgi`，符合 fnOS 1.2.0701 的 CGI 校验要求。
 
-GitHub 发布时，将版本号同步到 `package.json`、`package-lock.json` 和 `packaging/fpk-native/manifest`，更新 `RELEASE_NOTES.md`，然后推送对应版本标签（例如 `0.1.75`）。发布工作流会测试后端、构建 x86-64 FPK 并上传安装包和 SHA-256 校验文件到 GitHub Releases。
+GitHub 发布时，将版本号同步到 `package.json`、`package-lock.json` 和 `packaging/fpk-native/manifest`，更新 `RELEASE_NOTES.md`，然后推送对应版本标签（例如 `0.1.76`）。发布工作流会测试后端和前端 API 响应处理、构建 x86-64 FPK 并上传安装包和 SHA-256 校验文件到 GitHub Releases。
 
 如果在 WSL 中从 `/mnt/c`、`/mnt/d` 这类 Windows 挂载目录执行脚本，脚本会自动把源码复制到 `~/.cache/fncode-fpk-src` 后再安装依赖，避免 Windows `node_modules` 和 Linux 原生依赖混用导致 `npm ci` 失败。后续打包命令需在这个副本目录中执行，生成的包也位于该目录的 `build/fpk-output`。
 
@@ -92,6 +92,12 @@ GitHub 发布时，将版本号同步到 `package.json`、`package-lock.json` �
 
 ```bash
 npm run test:server
+```
+
+前端 API 响应处理测试：
+
+```bash
+npm run test:frontend
 ```
 
 ## 功能
